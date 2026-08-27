@@ -4,8 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "vitest --passWithNoTests",
-    "test:focused": "vitest --run --passWithNoTests",
+    "test": "vitest --run --passWithNoTests --exclude dist/**",
+    "test:focused": "vitest --run --passWithNoTests --exclude dist/**",
     "typecheck": "tsc --noEmit",
     "build": "tsc"
   },
