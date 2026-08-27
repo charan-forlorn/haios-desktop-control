@@ -26,6 +26,8 @@ export interface DesktopCommanderReadClient {
 
 export interface DesktopCommanderExecuteClient extends DesktopCommanderReadClient {
   startProcess(args: DesktopCommanderStartProcessArgs): Promise<UpstreamResult>;
+  readProcessOutput(args: { pid: number; timeout_ms?: number; offset?: number; length?: number }): Promise<UpstreamResult>;
+  killProcess(args: { pid: number }): Promise<UpstreamResult>;
 }
 
 export const DESKTOP_COMMANDER_VERSION = "0.2.47" as const;
@@ -108,6 +110,14 @@ export class DesktopCommanderClient implements DesktopCommanderExecuteClient {
 
   startProcess(args: DesktopCommanderStartProcessArgs) {
     return this.#call("start_process", args as unknown as Record<string, unknown>);
+  }
+
+  readProcessOutput(args: { pid: number; timeout_ms?: number; offset?: number; length?: number }) {
+    return this.#call("read_process_output", args as unknown as Record<string, unknown>);
+  }
+
+  killProcess(args: { pid: number }) {
+    return this.#call("kill_process", args as unknown as Record<string, unknown>);
   }
 
   async close(): Promise<void> {

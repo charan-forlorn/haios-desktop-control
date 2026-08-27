@@ -16,8 +16,9 @@ import {
   EXECUTE_TOOL_DEFINITIONS,
   READ_TOOL_DEFINITIONS,
 } from "./capabilities.js";
+import { dispatchExecuteTool } from "./execute.js";
 import { dispatchReadTool } from "./tools/read-tools.js";
-import type { DesktopCommanderReadClient } from "./upstream.js";
+import type { DesktopCommanderExecuteClient, DesktopCommanderReadClient } from "./upstream.js";
 
 const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_PORT = 8772;
@@ -40,6 +41,15 @@ export interface GatewayServerConfig {
   readonly auditSink?: AuditSink;
   readonly host?: string;
   readonly port?: number;
+}
+
+function isExecuteClient(upstream: DesktopCommanderReadClient): upstream is DesktopCommanderExecuteClient {
+  const candidate = upstream as Partial<DesktopCommanderExecuteClient>;
+  return (
+    typeof candidate.startProcess === "function" &&
+    typeof candidate.readProcessOutput === "function" &&
+    typeof candidate.killProcess === "function"
+  );
 }
 
 function objectSchema(
@@ -153,18 +163,22 @@ export async function createGatewayServer(
       const requestId = randomUUID();
       const name = request.params.name;
       const args = request.params.arguments ?? {};
+      const capabilityClass = classifyGatewayTool(name);
       let resultClass: "SUCCESS" | "DENIED" | "ERROR" | "TRUNCATED" = "ERROR";
       let decision: "ALLOW" | "DENY" = "DENY";
 
       try {
-        const result = await dispatchReadTool(name, args, {
-          upstream: config.upstream,
-        });
+        const result =
+          capabilityClass === "EXECUTE"
+            ? isExecuteClient(config.upstream)
+              ? await dispatchExecuteTool(name, args, { upstream: config.upstream })
+              : { decision: "DENY" as const, reason: "EXECUTE_UPSTREAM_UNAVAILABLE" }
+            : await dispatchReadTool(name, args, { upstream: config.upstream });
         decision = result.decision;
         resultClass =
           result.decision === "DENY"
             ? "DENIED"
-            : result.truncated
+            : "truncated" in result && result.truncated
               ? "TRUNCATED"
               : "SUCCESS";
 
@@ -172,7 +186,7 @@ export async function createGatewayServer(
           timestamp: new Date().toISOString(),
           requestId,
           tool: name,
-          capabilityClass: classifyGatewayTool(name),
+          capabilityClass,
           decision,
           resultClass,
           durationMs: Date.now() - startedAt,
@@ -187,7 +201,7 @@ export async function createGatewayServer(
           timestamp: new Date().toISOString(),
           requestId,
           tool: name,
-          capabilityClass: classifyGatewayTool(name),
+          capabilityClass,
           decision: "DENY",
           resultClass: "ERROR",
           durationMs: Date.now() - startedAt,
