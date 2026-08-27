@@ -1,8 +1,10 @@
+import type { GatewayCapabilityClass } from "./capabilities.js";
+
 export interface AuditEvent {
   readonly timestamp: string;
   readonly requestId: string;
   readonly tool: string;
-  readonly capabilityClass: "READ" | "UNKNOWN";
+  readonly capabilityClass: GatewayCapabilityClass;
   readonly targetScope?: string;
   readonly decision: "ALLOW" | "DENY";
   readonly resultClass: "SUCCESS" | "DENIED" | "ERROR" | "TRUNCATED";

@@ -18,6 +18,12 @@ const EXPECTED_TOOLS = [
   "search_list",
   "process_list",
   "session_list",
+  "project_test",
+  "project_typecheck",
+  "project_build",
+  "git_status",
+  "git_diff",
+  "git_log",
 ];
 
 function fakeUpstream(): DesktopCommanderReadClient {
@@ -63,7 +69,7 @@ async function connect(apiKey = "test-key") {
   return { address, client };
 }
 
-describe("M01 Streamable HTTP gateway", () => {
+describe("M02 Streamable HTTP gateway", () => {
   it("rejects missing authentication with HTTP 401", async () => {
     runtime = await createGatewayServer({
       apiKey: "test-key",
@@ -79,12 +85,22 @@ describe("M01 Streamable HTTP gateway", () => {
     await expect(connect("wrong-key")).rejects.toThrow();
   });
 
-  it("initializes and exposes exactly the M01 READ tool surface", async () => {
+  it("initializes and exposes exactly the M02 READ plus EXECUTE surface", async () => {
     const { client } = await connect();
     const listed = await client.listTools();
     expect(listed.tools.map((tool) => tool.name)).toEqual(EXPECTED_TOOLS);
     expect(listed.tools.map((tool) => tool.name)).not.toContain("write_file");
     expect(listed.tools.map((tool) => tool.name)).not.toContain("start_process");
     expect(listed.tools.map((tool) => tool.name)).not.toContain("kill_process");
+    const gitDiff = listed.tools.find((tool) => tool.name === "git_diff");
+    const gitLog = listed.tools.find((tool) => tool.name === "git_log");
+    expect(gitDiff?.inputSchema).toMatchObject({
+      properties: { mode: { enum: ["working", "staged"] } },
+      additionalProperties: false,
+    });
+    expect(gitLog?.inputSchema).toMatchObject({
+      properties: { maxCount: { minimum: 1, maximum: 20 } },
+      additionalProperties: false,
+    });
   });
 });

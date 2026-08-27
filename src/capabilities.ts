@@ -1,34 +1,51 @@
-export type GatewayCapabilityClass = "READ" | "UNKNOWN";
+export type GatewayCapabilityClass = "READ" | "EXECUTE" | "UNKNOWN";
 
-export interface ReadToolDefinition {
+export interface GatewayToolDefinition {
   readonly name: string;
-  readonly capabilityClass: "READ";
+  readonly capabilityClass: "READ" | "EXECUTE";
 }
 
-function defineReadTool(name: string): Readonly<ReadToolDefinition> {
-  return Object.freeze({ name, capabilityClass: "READ" });
+function defineTool(
+  name: string,
+  capabilityClass: "READ" | "EXECUTE",
+): Readonly<GatewayToolDefinition> {
+  return Object.freeze({ name, capabilityClass });
 }
 
-export const READ_TOOL_DEFINITIONS: readonly Readonly<ReadToolDefinition>[] =
+export const READ_TOOL_DEFINITIONS: readonly Readonly<GatewayToolDefinition>[] =
   Object.freeze([
-    defineReadTool("desktop_status"),
-    defineReadTool("gateway_status"),
-    defineReadTool("filesystem_list"),
-    defineReadTool("filesystem_read"),
-    defineReadTool("filesystem_read_multiple"),
-    defineReadTool("filesystem_stat"),
-    defineReadTool("search_start"),
-    defineReadTool("search_results"),
-    defineReadTool("search_stop"),
-    defineReadTool("search_list"),
-    defineReadTool("process_list"),
-    defineReadTool("session_list"),
+    defineTool("desktop_status", "READ"),
+    defineTool("gateway_status", "READ"),
+    defineTool("filesystem_list", "READ"),
+    defineTool("filesystem_read", "READ"),
+    defineTool("filesystem_read_multiple", "READ"),
+    defineTool("filesystem_stat", "READ"),
+    defineTool("search_start", "READ"),
+    defineTool("search_results", "READ"),
+    defineTool("search_stop", "READ"),    defineTool("search_list", "READ"),
+    defineTool("process_list", "READ"),
+    defineTool("session_list", "READ"),
+  ]);
+
+export const EXECUTE_TOOL_DEFINITIONS: readonly Readonly<GatewayToolDefinition>[] =
+  Object.freeze([
+    defineTool("project_test", "EXECUTE"),
+    defineTool("project_typecheck", "EXECUTE"),
+    defineTool("project_build", "EXECUTE"),
+    defineTool("git_status", "EXECUTE"),
+    defineTool("git_diff", "EXECUTE"),
+    defineTool("git_log", "EXECUTE"),
   ]);
 
 const READ_TOOL_NAMES: ReadonlySet<string> = new Set(
   READ_TOOL_DEFINITIONS.map(({ name }) => name),
 );
+const EXECUTE_TOOL_NAMES: ReadonlySet<string> = new Set(
+  EXECUTE_TOOL_DEFINITIONS.map(({ name }) => name),
+);
 
 export function classifyGatewayTool(name: string): GatewayCapabilityClass {
-  return READ_TOOL_NAMES.has(name) ? "READ" : "UNKNOWN";
+  if (READ_TOOL_NAMES.has(name)) return "READ";
+  if (EXECUTE_TOOL_NAMES.has(name)) return "EXECUTE";
+  return "UNKNOWN";
 }

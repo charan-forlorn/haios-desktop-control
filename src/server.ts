@@ -11,7 +11,11 @@ import {
 
 import { NOOP_AUDIT_SINK, type AuditSink } from "./audit.js";
 import { authenticateApiKey } from "./auth.js";
-import { classifyGatewayTool, READ_TOOL_DEFINITIONS } from "./capabilities.js";
+import {
+  classifyGatewayTool,
+  EXECUTE_TOOL_DEFINITIONS,
+  READ_TOOL_DEFINITIONS,
+} from "./capabilities.js";
 import { dispatchReadTool } from "./tools/read-tools.js";
 import type { DesktopCommanderReadClient } from "./upstream.js";
 
@@ -98,20 +102,28 @@ Object.assign(INPUT_SCHEMAS, {
   search_list: objectSchema(),
   process_list: objectSchema(),
   session_list: objectSchema(),
+  project_test: objectSchema(),
+  project_typecheck: objectSchema(),
+  project_build: objectSchema(),
+  git_status: objectSchema(),
+  git_diff: objectSchema({ mode: { type: "string", enum: ["working", "staged"] } }),
+  git_log: objectSchema({ maxCount: { ...INTEGER, minimum: 1, maximum: 20 } }),
 });
 
 function publicTools(): Tool[] {
-  return READ_TOOL_DEFINITIONS.map(({ name }) => ({
-    name,
-    description: `HAIOS M01 READ wrapper: ${name}`,
-    inputSchema: INPUT_SCHEMAS[name] ?? objectSchema(),
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
-  }));
+  return [...READ_TOOL_DEFINITIONS, ...EXECUTE_TOOL_DEFINITIONS].map(
+    ({ name, capabilityClass }) => ({
+      name,
+      description: `HAIOS ${capabilityClass} wrapper: ${name}`,
+      inputSchema: INPUT_SCHEMAS[name] ?? objectSchema(),
+      annotations: {
+        readOnlyHint: capabilityClass === "READ",
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    }),
+  );
 }
 
 export async function createGatewayServer(
