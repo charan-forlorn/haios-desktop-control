@@ -50,6 +50,8 @@
 - [ ] Write RED tests for valid profiles, invalid properties, metacharacter payloads, invalid counts/modes, timeout/output bounds, and zero upstream calls on denial.
 - [ ] Capture deterministic tracked Git state before execution and after completion; identical state is mandatory for success.
 - [ ] Treat ignored/regenerable runtime output as non-source state, while Git index/ref/tracked diff changes cause `UNAUTHORIZED_MUTATION_DETECTED`.
+- [ ] Poll only the PID returned by the gateway-owned start call using internal `read_process_output`; never accept a client PID.
+- [ ] On hard timeout only, use internal `kill_process` against that exact gateway-owned PID and verify cleanup; never expose termination downstream.
 - [ ] Bound captured execution output to 64 KiB with explicit truncation metadata and record exit/result class.
 - [ ] Route EXECUTE tools through auth/classification before internal upstream dispatch; metadata-only audit remains enforced.
 - [ ] Run focused/full/typecheck/build and M01 regression; commit.

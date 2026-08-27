@@ -86,8 +86,10 @@ For every profile the gateway records a deterministic pre/post tracked-state dig
 - no interactive stdin
 - no detached/background processes
 - no process termination tools exposed downstream
+- the gateway may use internal `read_process_output` to observe only the PID returned by its own `start_process` call
+- on hard timeout only, the gateway may use internal `kill_process` against that exact gateway-owned PID as a cleanup guard; clients cannot select a PID or invoke termination
 
-Timeout or protocol uncertainty returns DENY/ERROR and the qualification harness must prove no mission-owned process tree remains.
+Timeout or protocol uncertainty returns DENY/ERROR. Qualification must prove cleanup is exact-target, bounded, and leaves no mission-owned process tree. Cleanup-only termination does not unlock DESTRUCTIVE capability.
 
 ## 8. Explicitly Locked Capabilities
 
