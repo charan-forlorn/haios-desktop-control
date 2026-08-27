@@ -3,6 +3,12 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 
 export type UpstreamResult = unknown;
 
+export interface DesktopCommanderStartProcessArgs {
+  readonly command: string;
+  readonly timeout_ms: number;
+  readonly shell?: string;
+}
+
 export interface DesktopCommanderReadClient {
   listDirectory(args: { path: string; depth: number }): Promise<UpstreamResult>;
   readFile(args: { path: string; offset?: number; length?: number }): Promise<UpstreamResult>;
@@ -18,9 +24,13 @@ export interface DesktopCommanderReadClient {
   close(): Promise<void>;
 }
 
+export interface DesktopCommanderExecuteClient extends DesktopCommanderReadClient {
+  startProcess(args: DesktopCommanderStartProcessArgs): Promise<UpstreamResult>;
+}
+
 export const DESKTOP_COMMANDER_VERSION = "0.2.47" as const;
 
-export class DesktopCommanderClient implements DesktopCommanderReadClient {
+export class DesktopCommanderClient implements DesktopCommanderExecuteClient {
   readonly #client: Client;
   readonly #transport: StdioClientTransport;
 
@@ -94,6 +104,10 @@ export class DesktopCommanderClient implements DesktopCommanderReadClient {
 
   getConfig() {
     return this.#call("get_config");
+  }
+
+  startProcess(args: DesktopCommanderStartProcessArgs) {
+    return this.#call("start_process", args as unknown as Record<string, unknown>);
   }
 
   async close(): Promise<void> {
