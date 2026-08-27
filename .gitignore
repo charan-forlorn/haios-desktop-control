@@ -1,0 +1,12 @@
+node_modules/
+dist/
+coverage/
+
+# Transient qualification evidence and runtime output
+evidence/
+runtime/
+*.log
+
+# Protected qualification proof trees
+q2-bridge-proof/
+q2r1-bridge-proof/
