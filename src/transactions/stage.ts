@@ -1,4 +1,6 @@
 import { randomBytes } from "node:crypto";
+import { realpath } from "node:fs/promises";
+import { win32 } from "node:path";
 
 import { authorizePath } from "../paths.js";
 import { nextTransactionState } from "./state.js";
@@ -19,9 +21,27 @@ function projectScoped(normalizedPath: string): boolean {
   return lower === PROJECT_ROOT || lower.startsWith(`${PROJECT_ROOT}\\`);
 }
 
+async function nearestExistingProjectRealpath(normalizedPath: string): Promise<string | null> {
+  let candidate = normalizedPath;
+  const volumeRoot = win32.parse(normalizedPath).root;
+  while (true) {
+    try {
+      return win32.normalize(await realpath(candidate));
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT" && code !== "ENOTDIR") return null;
+    }
+    const parent = win32.dirname(candidate);
+    if (parent === candidate || candidate === volumeRoot) return null;
+    candidate = parent;
+  }
+}
+
 async function authorizeProjectPath(input: string): Promise<string | null> {
   const decision = await authorizePath(input);
   if (decision.decision !== "ALLOW" || !projectScoped(decision.normalizedPath)) return null;
+  const resolvedAncestor = await nearestExistingProjectRealpath(decision.normalizedPath);
+  if (resolvedAncestor === null || !projectScoped(resolvedAncestor)) return null;
   return decision.normalizedPath;
 }
 export async function beginTransaction(

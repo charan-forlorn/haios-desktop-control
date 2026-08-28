@@ -184,12 +184,18 @@ function exactStrings(raw: unknown, keys: readonly string[]): Record<string, str
 }
 
 const INVALID_ARGS: TransactionDispatchResult = Object.freeze({ decision: "DENY" as const, reason: "INVALID_MUTATION_ARGUMENTS" });
+const TRANSACTION_TOOL_NAMES = new Set([
+  "transaction_begin", "transaction_stage_create", "transaction_stage_replace",
+  "transaction_stage_move", "transaction_validate", "transaction_apply",
+  "transaction_rollback", "transaction_status",
+]);
 
 export async function dispatchTransactionTool(
   service: TransactionServiceApi,
   name: string,
   raw: unknown,
 ): Promise<TransactionDispatchResult> {
+  if (!TRANSACTION_TOOL_NAMES.has(name)) return { decision: "DENY", reason: "TOOL_DENIED" };
   if (name === "transaction_begin") {
     return isRecord(raw) && Object.keys(raw).length === 0 ? service.begin() : INVALID_ARGS;
   }
