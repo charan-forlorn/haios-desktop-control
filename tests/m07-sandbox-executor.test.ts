@@ -140,6 +140,7 @@ describe("M07 pinned Docker sandbox executor", () => {
     expect(run).toEqual(expect.arrayContaining(["--network", "haios-m07-net-abc123"]));
     const fixture = fx.calls.find((args) => args[0] === "run" && args.includes("-d"))!;
     expect(fixture.join(" ")).not.toContain("type=bind");
+    expect(fixture).toEqual(expect.arrayContaining(["--network-alias", "m07-fixture"]));
   });
 
   it("exposes no generic Docker run/exec primitive on the class", () => {

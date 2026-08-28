@@ -151,6 +151,7 @@ export class SandboxExecutor {
       "--memory", "256m", "--cpus", "0.5", "--pids-limit", "64",
       "--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=16777216",
       "--network", network,
+      "--network-alias", "m07-fixture",
       "--entrypoint", "node",
       M07_NODE_TOOLCHAIN.image,
       "-e", fixtureCode,
