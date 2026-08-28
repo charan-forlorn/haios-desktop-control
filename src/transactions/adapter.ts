@@ -11,7 +11,7 @@ export interface FileProbe {
   read(path: string): Promise<Buffer>;
 }
 
-const NODE_FILE_PROBE: FileProbe = Object.freeze({
+export const NODE_FILE_PROBE: FileProbe = Object.freeze({
   async exists(path: string): Promise<boolean> {
     try {
       await access(path);
@@ -23,7 +23,7 @@ const NODE_FILE_PROBE: FileProbe = Object.freeze({
   read: (path: string) => readFile(path),
 });
 
-function sha256(bytes: Buffer): string {
+export function sha256Bytes(bytes: Buffer): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
 export type MutationAdapterResult =
@@ -48,7 +48,7 @@ export class TransactionMutationAdapter {
   async replace(path: string, expectedSha256: string, content: string): Promise<MutationAdapterResult> {
     if (!(await this.#probe.exists(path))) return { decision: "DENY", reason: "TARGET_MISSING" };
     const bytes = await this.#probe.read(path);
-    if (sha256(bytes) !== expectedSha256) return { decision: "DENY", reason: "PREIMAGE_MISMATCH" };
+    if (sha256Bytes(bytes) !== expectedSha256) return { decision: "DENY", reason: "PREIMAGE_MISMATCH" };
     await this.#upstream.writeFile({ path, content, mode: "rewrite" });
     return { decision: "ALLOW", preimage: bytes.toString("utf8") };
   }

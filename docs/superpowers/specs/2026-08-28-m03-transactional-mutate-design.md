@@ -37,9 +37,9 @@ Each mutation wrapper requires a server-issued `transactionId`. Apply and rollba
 
 ## State machine
 
-`OPEN -> STAGED -> VALIDATED -> APPLIED -> VERIFIED -> PROMOTED`
+`OPEN -> STAGED -> VALIDATED -> APPLYING -> APPLIED -> VERIFIED -> PROMOTED`
 
-Failure after `APPLIED` transitions through `ROLLBACK_REQUIRED -> ROLLED_BACK`. Invalid transitions fail closed and perform zero upstream mutation.
+Failure after the first mutation in `APPLYING`, or after `APPLIED`, transitions through `ROLLBACK_REQUIRED -> ROLLED_BACK`. Invalid transitions fail closed and perform zero upstream mutation.
 ## Currentness and preimage contract
 
 `transaction_begin` captures:

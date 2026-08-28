@@ -2,6 +2,7 @@ export type TransactionState =
   | "OPEN"
   | "STAGED"
   | "VALIDATED"
+  | "APPLYING"
   | "APPLIED"
   | "VERIFIED"
   | "PROMOTED"
@@ -12,6 +13,7 @@ export type TransactionEvent =
   | "stage"
   | "validate"
   | "apply"
+  | "apply_complete"
   | "verify"
   | "promote"
   | "require_rollback"
@@ -35,3 +37,8 @@ export interface TransactionRecord {
   readonly currentness: TransactionCurrentness;
   readonly intents: TransactionIntent[];
 }
+
+export type RollbackPlan =
+  | { readonly kind: "create"; readonly path: string; readonly postSha256: string }
+  | { readonly kind: "replace"; readonly path: string; readonly preSha256: string; readonly postSha256: string; readonly bundlePath: string }
+  | { readonly kind: "move"; readonly sourcePath: string; readonly destinationPath: string; readonly preSha256: string; readonly postSha256: string; readonly bundlePath: string };

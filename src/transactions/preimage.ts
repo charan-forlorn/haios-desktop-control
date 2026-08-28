@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 export interface RollbackBundleRecord {
@@ -33,5 +33,9 @@ export class RollbackBundleStore {
       sha256: digest(bytes),
       bundlePath,
     });
+  }
+
+  read(bundlePath: string): Promise<Buffer> {
+    return readFile(bundlePath);
   }
 }
