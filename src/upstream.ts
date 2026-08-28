@@ -30,9 +30,14 @@ export interface DesktopCommanderExecuteClient extends DesktopCommanderReadClien
   killProcess(args: { pid: number }): Promise<UpstreamResult>;
 }
 
+export interface DesktopCommanderMutationClient extends DesktopCommanderExecuteClient {
+  writeFile(args: { path: string; content: string; mode: "rewrite" }): Promise<UpstreamResult>;
+  moveFile(args: { source: string; destination: string }): Promise<UpstreamResult>;
+}
+
 export const DESKTOP_COMMANDER_VERSION = "0.2.47" as const;
 
-export class DesktopCommanderClient implements DesktopCommanderExecuteClient {
+export class DesktopCommanderClient implements DesktopCommanderMutationClient {
   readonly #client: Client;
   readonly #transport: StdioClientTransport;
 
@@ -118,6 +123,14 @@ export class DesktopCommanderClient implements DesktopCommanderExecuteClient {
 
   killProcess(args: { pid: number }) {
     return this.#call("kill_process", args as unknown as Record<string, unknown>);
+  }
+
+  writeFile(args: { path: string; content: string; mode: "rewrite" }) {
+    return this.#call("write_file", args);
+  }
+
+  moveFile(args: { source: string; destination: string }) {
+    return this.#call("move_file", args);
   }
 
   async close(): Promise<void> {
