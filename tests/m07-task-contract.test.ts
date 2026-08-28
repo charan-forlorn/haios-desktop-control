@@ -54,7 +54,15 @@ function validEffectPolicy() {
     policies: {
       "default-artifacts-v1": {
         allowedArtifactPatterns: ["dist/**", "coverage/**", "*.tsbuildinfo"],
-        protectedPatterns: ["src/**", ".env*", "**/.env*"],
+        protectedPatterns: [
+          "src/**",
+          ".env*",
+          "**/.env*",
+          "**/*secret*",
+          "**/*secret*/**",
+          "**/*credential*",
+          "**/*credential*/**",
+        ],
       },
     },
   };
@@ -130,6 +138,33 @@ describe("M07 R1.2-complete task registry contract", () => {
     expect(() => validateTaskRegistryV2(undeclared)).toThrow(/TASK_REGISTRY_V2_INVALID/);
   });
 
+  it.each(["toString", "constructor", "__proto__"])(
+    "does not treat inherited parameter name %s as declared",
+    (inheritedName) => {
+      const raw = validRegistry();
+      Reflect.deleteProperty(raw.tasks["node.test.run"].paramSchemas, "testPath");
+      Reflect.deleteProperty(raw.tasks["node.test.run"].paramSchemas, "reporter");
+      raw.tasks["node.test.run"].requiredParams = [inheritedName];
+      raw.tasks["node.test.run"].argvTemplate = ["node", `{{${inheritedName}}}`];
+
+      expect(() => validateTaskRegistryV2(raw)).toThrow(/TASK_REGISTRY_V2_INVALID/);
+    },
+  );
+
+  it("returns own-property-safe immutable registry dictionaries", () => {
+    const registry = validateTaskRegistryV2(validRegistry());
+    const recipe = registry.tasks["node.test.run"]!;
+
+    expect(Object.getPrototypeOf(registry.tasks)).toBeNull();
+    expect(Object.getPrototypeOf(recipe.paramSchemas)).toBeNull();
+    for (const inheritedName of ["toString", "constructor", "__proto__"]) {
+      expect(Object.hasOwn(registry.tasks, inheritedName)).toBe(false);
+      expect(Object.hasOwn(recipe.paramSchemas, inheritedName)).toBe(false);
+      expect(registry.tasks[inheritedName]).toBeUndefined();
+      expect(recipe.paramSchemas[inheritedName]).toBeUndefined();
+    }
+  });
+
   it("rejects S2 and incompatible network/profile pairs", () => {
     const s2 = validRegistry();
     s2.tasks["node.test.run"].sandboxProfile = "S2";
@@ -197,6 +232,40 @@ describe("M07 fail-closed task effect policy contract", () => {
     const unprotected = validEffectPolicy();
     unprotected.policies["default-artifacts-v1"].protectedPatterns = [];
     expect(() => validateTaskEffectPolicy(unprotected)).toThrow(/TASK_EFFECT_POLICY_INVALID/);
+  });
+
+  it("returns an own-property-safe immutable policy dictionary", () => {
+    const policySet = validateTaskEffectPolicy(validEffectPolicy());
+
+    expect(Object.getPrototypeOf(policySet.policies)).toBeNull();
+    for (const inheritedName of ["toString", "constructor", "__proto__"]) {
+      expect(Object.hasOwn(policySet.policies, inheritedName)).toBe(false);
+      expect(policySet.policies[inheritedName]).toBeUndefined();
+    }
+  });
+
+  it.each(["**/*secret*/**", "**/*credential*/**"])(
+    "fails closed when descendant protected pattern %s is absent",
+    (requiredPattern) => {
+      const raw = validEffectPolicy();
+      raw.policies["default-artifacts-v1"].allowedArtifactPatterns = ["**/.cache/**", "dist/**"];
+      raw.policies["default-artifacts-v1"].protectedPatterns = raw.policies[
+        "default-artifacts-v1"
+      ].protectedPatterns.filter((pattern) => pattern !== requiredPattern);
+
+      expect(() => validateTaskEffectPolicy(raw)).toThrow(/TASK_EFFECT_POLICY_INVALID/);
+    },
+  );
+
+  it("represents deny-overrides-allow for protected descendants of allowed artifact directories", () => {
+    const policySet = validateTaskEffectPolicy(validEffectPolicy());
+    const policy = policySet.policies["default-artifacts-v1"]!;
+
+    expect(policy.allowedArtifactPatterns).toContain("dist/**");
+    expect(policy.protectedPatterns).toEqual(expect.arrayContaining([
+      "**/*secret*/**",
+      "**/*credential*/**",
+    ]));
   });
 
   it.each(["**/*", "**", "*", "/workspace/**", "../dist/**", "dist\\**", "C:/workspace/**"])(

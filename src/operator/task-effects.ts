@@ -29,7 +29,15 @@ const ALLOWED_ARTIFACT_PATTERNS = new Set([
   "dist/**",
   "*.tsbuildinfo",
 ]);
-const REQUIRED_PROTECTED_PATTERNS = ["src/**", ".env*", "**/.env*"] as const;
+const REQUIRED_PROTECTED_PATTERNS = [
+  "src/**",
+  ".env*",
+  "**/.env*",
+  "**/*secret*",
+  "**/*secret*/**",
+  "**/*credential*",
+  "**/*credential*/**",
+] as const;
 const OVERBROAD_PATTERNS = new Set(["*", "**", "**/*"]);
 
 function invalid(detail: string): never {
@@ -102,7 +110,7 @@ export function validateTaskEffectPolicy(raw: unknown): TaskEffectPolicySet {
   const version = identity(raw.version, VERSION, "VERSION");
   if (!isRecord(raw.policies) || Object.keys(raw.policies).length === 0) invalid("POLICIES");
 
-  const policies: Record<string, TaskEffectPolicy> = {};
+  const policies = Object.create(null) as Record<string, TaskEffectPolicy>;
   for (const policyId of Object.keys(raw.policies).sort()) {
     if (!ID.test(policyId)) invalid(`POLICY_ID:${policyId}`);
     policies[policyId] = parsePolicy(policyId, raw.policies[policyId]);

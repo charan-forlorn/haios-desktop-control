@@ -21,7 +21,9 @@
         ".env*",
         "**/.env*",
         "**/*secret*",
-        "**/*credential*"
+        "**/*secret*/**",
+        "**/*credential*",
+        "**/*credential*/**"
       ]
     }
   }

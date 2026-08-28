@@ -152,7 +152,7 @@ function parseRecipe(taskId: string, value: unknown): TaskRecipeV2 {
   if (!SAFE_EXECUTABLES.has(argvTemplate[0]!)) invalid(`TASK:${taskId}:EXECUTABLE`);
 
   if (!isRecord(value.paramSchemas)) invalid(`TASK:${taskId}:PARAM_SCHEMAS`);
-  const paramSchemas: Record<string, TaskParamSchemaV2> = {};
+  const paramSchemas = Object.create(null) as Record<string, TaskParamSchemaV2>;
   for (const name of Object.keys(value.paramSchemas).sort()) {
     if (!PARAM_NAME.test(name)) invalid(`TASK:${taskId}:PARAM_NAME`);
     paramSchemas[name] = parseParamSchema(taskId, name, value.paramSchemas[name]);
@@ -161,7 +161,7 @@ function parseRecipe(taskId: string, value: unknown): TaskRecipeV2 {
   const requiredParams = stringArray(value.requiredParams, `TASK:${taskId}:REQUIRED`);
   if (
     new Set(requiredParams).size !== requiredParams.length
-    || requiredParams.some((name) => paramSchemas[name] === undefined)
+    || requiredParams.some((name) => !Object.hasOwn(paramSchemas, name))
   ) {
     invalid(`TASK:${taskId}:REQUIRED`);
   }
@@ -172,7 +172,7 @@ function parseRecipe(taskId: string, value: unknown): TaskRecipeV2 {
     const match = PLACEHOLDER.exec(argument);
     if (match) {
       const name = match[1]!;
-      if (paramSchemas[name] === undefined) invalid(`TASK:${taskId}:PLACEHOLDER:${name}`);
+      if (!Object.hasOwn(paramSchemas, name)) invalid(`TASK:${taskId}:PLACEHOLDER:${name}`);
       placeholders.add(name);
     } else if (argument.includes("{{") || argument.includes("}}")) {
       invalid(`TASK:${taskId}:PLACEHOLDER_SYNTAX`);
@@ -235,7 +235,7 @@ export function validateTaskRegistryV2(raw: unknown): TaskRegistryV2 {
   if (!ID.test(registryId) || !VERSION.test(version)) invalid("IDENTITY");
   if (!isRecord(raw.tasks) || Object.keys(raw.tasks).length === 0) invalid("TASKS");
 
-  const tasks: Record<string, TaskRecipeV2> = {};
+  const tasks = Object.create(null) as Record<string, TaskRecipeV2>;
   for (const taskId of Object.keys(raw.tasks).sort()) {
     if (!ID.test(taskId)) invalid(`TASK_ID:${taskId}`);
     tasks[taskId] = parseRecipe(taskId, raw.tasks[taskId]);
