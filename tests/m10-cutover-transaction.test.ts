@@ -107,12 +107,27 @@ describe("M10 sealed cutover transaction contract", () => {
       "Wait-TunnelFunctionalReady",
       "M10_DEDICATED_TUNNEL_FUNCTIONAL_READINESS_TIMEOUT",
       "control_plane_poll_recent",
-      "host.docker.internal:8769/healthz",
+      "Test-ContainerMcpReachable",
+      "host.docker.internal:8769/mcp",
     ]) expect(source).toContain(marker);
+    expect(source).not.toContain("host.docker.internal:8769/healthz");
     const switchCall = source.indexOf("operator-dedicated-tunnel-client");
     const functional = source.lastIndexOf("Wait-TunnelFunctionalReady");
     expect(functional).toBeGreaterThan(switchCall);
     expect(source).not.toContain("Wait-ContainerHealthy $DedicatedContainer 60");
+  });
+  it("uses authenticated MCP proof for host readiness and persists bounded task failure diagnostics", async () => {
+    const source = await readFile(executePath, "utf8");
+    for (const marker of [
+      "probe-m10-readonly-host.mjs",
+      "Invoke-M10HostProbe",
+      "host-direct-proof.json",
+      "M10_HOST_8769_MCP_PROOF_FAILED",
+      "m10-host-supervisor-failure.json",
+      "LastTaskResult",
+      "M10_HOST_8769_EMERGENCY_READY",
+    ]) expect(source).toContain(marker);
+    expect(source).not.toContain("M10_HOST_8769_EMERGENCY_HEALTH_FAILED");
   });
   it("binds rollback to exact preimages and refuses ambiguous drift", async () => {
     const source = await readFile(rollbackPath, "utf8");
@@ -161,7 +176,9 @@ describe("M10 post-cutover live qualifier contract", () => {
     const path = join(process.cwd(), "scripts", "qualify-m10-live.ps1");
     const source = await readFile(path, "utf8");
     for (const marker of [
+      "host-direct-proof.json",
       "dedicated-route-proof.json",
+      "M10_HOST_DIRECT_PROOF_MISSING",
       "M10_DEDICATED_ROUTE_PROOF_MISSING",
       "exact_13_tools",
       "READ_ONLY_EMERGENCY",
@@ -172,6 +189,7 @@ describe("M10 post-cutover live qualifier contract", () => {
       "secret_acl_pass",
       "M10_LIVE_READ_ONLY_QUALIFICATION_PASS",
     ]) expect(source).toContain(marker);
+    expect(source).not.toContain("M10_LIVE_HOST_HEALTH_FAILED");
     for (const forbidden of [
       "Register-ScheduledTask", "Unregister-ScheduledTask", "Start-ScheduledTask", "Stop-ScheduledTask",
       " compose up", " compose down", "docker rm", "Remove-Item -LiteralPath $StateRoot",

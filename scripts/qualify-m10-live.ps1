@@ -49,8 +49,11 @@ if(-not(Test-Path -LiteralPath $journalPath) -or -not ([IO.File]::ReadAllText($j
 if(-not(Test-Path -LiteralPath $DeploymentRoot)){throw "M10_LIVE_DEPLOYMENT_MISSING"}
 $head=(& git.exe -C $DeploymentRoot rev-parse HEAD).Trim();if($head -ne [string]$Envelope.candidate_head){throw "M10_LIVE_DEPLOYMENT_HEAD_DRIFT"}
 if((Get-ManifestDigest $DeploymentRoot) -ne [string]$Envelope.candidate_manifest_sha256){throw "M10_LIVE_DEPLOYMENT_MANIFEST_DRIFT"}
-try{$health=Invoke-RestMethod -Uri "http://127.0.0.1:8769/healthz" -TimeoutSec 3}catch{throw "M10_LIVE_HOST_HEALTH_FAILED"}
-if([string]$health.mode -ne "READ_ONLY_EMERGENCY"){throw "M10_LIVE_HOST_MODE_FAILED"}
+$hostProofPath=Join-Path $EvidenceRoot "host-direct-proof.json"
+if(-not(Test-Path -LiteralPath $hostProofPath)){throw "M10_HOST_DIRECT_PROOF_MISSING"}
+$hostProof=Get-Content -Raw -LiteralPath $hostProofPath|ConvertFrom-Json
+$hostProofPass=[bool]$hostProof.exact_13_tools -and [string]$hostProof.mode -eq "READ_ONLY_EMERGENCY" -and $hostProof.mutation_active -eq $false -and $hostProof.s2_enabled -eq $false -and $hostProof.generic_exec -eq $false -and $hostProof.generic_shell -eq $false -and [string]$hostProof.destructive -eq "LOCKED" -and [bool]$hostProof.mutation_denied
+if(-not $hostProofPass){throw "M10_HOST_DIRECT_PROOF_INVALID"}
 $sharedBinding=@($Envelope.container_digests|Where-Object{$_.name -eq $SharedTunnel})[0]
 if(-not $sharedBinding -or (Get-ContainerIntegrityDigest $SharedTunnel) -ne [string]$sharedBinding.sha256){throw "M10_LIVE_SHARED_TUNNEL_DRIFT"}
 if((@(Get-ListenerIdentity 8768)-join ',') -ne (@($Envelope.listener_8768)-join ',')){throw "M10_LIVE_8768_DRIFT"}

@@ -68,6 +68,21 @@ describe("M09 host operator runtime factory", () => {
     expect(status).toMatchObject({ mode: "READ_ONLY_EMERGENCY", mutationActive: false });
   });
 
+  it("resolves the emergency foundation registry independently of process cwd", async () => {
+    const originalCwd = process.cwd();
+    const foreignCwd = await mkdtemp(join(tmpdir(), "m09-foreign-cwd-"));
+    roots.push(foreignCwd);
+    try {
+      process.chdir(foreignCwd);
+      const connected = await connect(await tempConfig());
+      const listed = await connected.listTools();
+      expect(listed.tools.map((tool) => tool.name)).toEqual(OPERATOR_V1_TOOL_NAMES);
+      const status = payload(await connected.callTool({ name: "operator_status", arguments: {} }));
+      expect(status).toMatchObject({ mode: "READ_ONLY_EMERGENCY", mutationActive: false });
+    } finally {
+      process.chdir(originalCwd);
+    }
+  });
   it("constructs ACTIVE only through the exact M08 qualified identities", async () => {
     const connected = await connect(await tempConfig("ACTIVE"));
     const status = payload(await connected.callTool({ name: "operator_status", arguments: {} }));

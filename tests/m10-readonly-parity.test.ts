@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const helperPath = join(process.cwd(), "scripts", "live-m10-readonly-parity.mjs");
+const hostProbePath = join(process.cwd(), "scripts", "probe-m10-readonly-host.mjs");
 
 describe("M10 disposable read-only parity helper", () => {
   it("hard-binds disposable ports, emergency mode, empty projects, and synthetic tunnel transport", async () => {
@@ -37,6 +38,26 @@ describe("M10 disposable read-only parity helper", () => {
     ]) expect(source).toContain(marker);
   });
 
+  it("defines an authenticated production host MCP proof without exposing the API key", async () => {
+    const source = await readFile(hostProbePath, "utf8");
+    for (const marker of [
+      "http://127.0.0.1:8769/mcp",
+      "loadHostApiKey",
+      "OPERATOR_V1_TOOL_NAMES",
+      "operator_status",
+      "operator_capabilities",
+      "operator_begin_transaction",
+      "TOOL_DENIED_INACTIVE_MODE",
+      "exact_13_tools",
+      "mutation_active",
+      "s2_enabled",
+      "generic_exec",
+      "generic_shell",
+      "destructive",
+      "mutation_denied",
+    ]) expect(source).toContain(marker);
+    expect(source).not.toContain("process.stdout.write(apiKey");
+  });
   it("forbids production authority and persists no secret bytes", async () => {
     const source = await readFile(helperPath, "utf8");
     for (const forbidden of [

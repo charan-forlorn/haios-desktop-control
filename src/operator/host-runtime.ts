@@ -45,14 +45,15 @@ function noAuthorityUpstream(): DesktopCommanderReadClient {
   });
 }
 
-function qualifiedIdentityPaths() {
+function runtimeIdentityPaths() {
   const moduleDir = dirname(fileURLToPath(import.meta.url));
   const candidates = [resolve(moduleDir, "../.."), resolve(moduleDir, "../../..")];
   for (const root of candidates) {
+    const foundationRegistryPath = join(root, "task-registry.m05.json");
     const registryPath = join(root, "task-registry.m07.json");
     const effectPolicyPath = join(root, "task-effects.m07.json");
-    if (existsSync(registryPath) && existsSync(effectPolicyPath)) {
-      return Object.freeze({ registryPath, effectPolicyPath });
+    if (existsSync(foundationRegistryPath) && existsSync(registryPath) && existsSync(effectPolicyPath)) {
+      return Object.freeze({ foundationRegistryPath, registryPath, effectPolicyPath });
     }
   }
   throw new Error("M09_RUNTIME_IDENTITY_FILES_NOT_FOUND");
@@ -83,7 +84,7 @@ export async function createHostOperatorRuntime(config: unknown): Promise<Gatewa
   const upstream = noAuthorityUpstream();
 
   if (validated.mode === "ACTIVE") {
-    const paths = qualifiedIdentityPaths();
+    const paths = runtimeIdentityPaths();
     const operatorRuntime = await createQualifiedOperatorControlRuntime({
       worktreeRoot: validated.worktreeRoot,
       allowedProjects: validated.allowedProjects,
@@ -101,11 +102,13 @@ export async function createHostOperatorRuntime(config: unknown): Promise<Gatewa
     });
   }
 
+  const paths = runtimeIdentityPaths();
   return createGatewayServer({
     apiKey,
     upstream,
     protocolMode: "operator13",
     operatorMode: "READ_ONLY_EMERGENCY",
+    operatorTaskRegistryPath: paths.foundationRegistryPath,
     host: "127.0.0.1",
     port: validated.port,
   });

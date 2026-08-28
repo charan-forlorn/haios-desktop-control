@@ -137,13 +137,21 @@ try{
       return $LASTEXITCODE -eq 0
     }finally{$ErrorActionPreference=$previous}
   }
-  function Get-TunnelFunctionalReadinessSnapshot([string]$Name,[int]$HealthPort,[string]$BackendHealthUrl){
+  function Test-ContainerMcpReachable([string]$Name,[string]$Url){
+    $previous=$ErrorActionPreference
+    try{
+      $ErrorActionPreference='Continue'
+      & docker.exe exec $Name sh -c "wget -T 3 -S -O /dev/null '$Url' 2>&1 | grep -Eq 'HTTP/[0-9.]+[[:space:]]+401'" *> $null
+      return $LASTEXITCODE -eq 0
+    }finally{$ErrorActionPreference=$previous}
+  }
+  function Get-TunnelFunctionalReadinessSnapshot([string]$Name,[int]$HealthPort,[string]$BackendMcpUrl){
     $state=(& docker.exe inspect --format '{{.State.Status}}' $Name 2>$null).Trim()
     if($LASTEXITCODE -ne 0 -or -not $state){throw "M10_TUNNEL_STATE_UNAVAILABLE:$Name"}
     $dockerHealth=(& docker.exe inspect --format '{{.State.Health.Status}}' $Name 2>$null).Trim()
     if($LASTEXITCODE -ne 0 -or -not $dockerHealth){$dockerHealth='unknown'}
     $healthzPass=Test-ContainerHttpGet $Name "http://127.0.0.1:$HealthPort/healthz"
-    $backendReachable=Test-ContainerHttpGet $Name $BackendHealthUrl
+    $backendReachable=Test-ContainerMcpReachable $Name $BackendMcpUrl
     $metrics=$null
     $previous=$ErrorActionPreference
     try{
@@ -167,11 +175,11 @@ try{
       functional_ready=($state -eq 'running' -and $healthzPass -and $backendReachable -and $pollRecent)
     }
   }
-  function Wait-TunnelFunctionalReady([string]$Name,[int]$HealthPort,[string]$BackendHealthUrl,[int]$Seconds=60){
+  function Wait-TunnelFunctionalReady([string]$Name,[int]$HealthPort,[string]$BackendMcpUrl,[int]$Seconds=60){
     $deadline=[DateTime]::UtcNow.AddSeconds($Seconds); $snapshot=$null
     do{
       Start-Sleep -Milliseconds 500
-      $snapshot=Get-TunnelFunctionalReadinessSnapshot $Name $HealthPort $BackendHealthUrl
+      $snapshot=Get-TunnelFunctionalReadinessSnapshot $Name $HealthPort $BackendMcpUrl
       if([bool]$snapshot.functional_ready){return $snapshot}
     }while([DateTime]::UtcNow -lt $deadline)
     throw "M10_DEDICATED_TUNNEL_FUNCTIONAL_READINESS_TIMEOUT"
@@ -245,12 +253,34 @@ services:
   Start-ScheduledTask -TaskName $TaskName
   Write-Journal "M10_SCHEDULED_TASK_STARTED"
 
-  $deadline=[DateTime]::UtcNow.AddSeconds(45); $hostHealth=$null
+  $HostProbe=Join-Path $DeploymentRoot "scripts\probe-m10-readonly-host.mjs"
+  $HostProof=Join-Path $EvidenceRoot "host-direct-proof.json"
+  function Invoke-M10HostProbe([string]$NodePath,[string]$ProbePath,[string]$KeyPath,[string]$ProofPath){
+    $previous=$ErrorActionPreference
+    try{
+      $ErrorActionPreference='Continue'
+      & $NodePath $ProbePath $KeyPath $ProofPath *> $null
+      return $LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath $ProofPath)
+    }finally{$ErrorActionPreference=$previous}
+  }
+  $deadline=[DateTime]::UtcNow.AddSeconds(45); $hostProofPass=$false
   do{
     Start-Sleep -Milliseconds 500
-    try{$hostHealth=Invoke-RestMethod -Uri "http://127.0.0.1:8769/healthz" -TimeoutSec 2}catch{$hostHealth=$null}
-  }while(($null -eq $hostHealth -or [string]$hostHealth.mode -ne "READ_ONLY_EMERGENCY") -and [DateTime]::UtcNow -lt $deadline)
-  if($null -eq $hostHealth -or [string]$hostHealth.mode -ne "READ_ONLY_EMERGENCY"){throw "M10_HOST_8769_EMERGENCY_HEALTH_FAILED"}
+    if(Invoke-M10HostProbe $node $HostProbe $ApiKeyFile $HostProof){$hostProofPass=$true;break}
+  }while([DateTime]::UtcNow -lt $deadline)
+  if(-not $hostProofPass){
+    $taskCurrent=Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    $taskInfo=Get-ScheduledTaskInfo -TaskName $TaskName -ErrorAction SilentlyContinue
+    $failure=[ordered]@{
+      task_state=if($taskCurrent){[string]$taskCurrent.State}else{"MISSING"}
+      LastTaskResult=if($taskInfo){[int]$taskInfo.LastTaskResult}else{$null}
+      last_run_time=if($taskInfo){$taskInfo.LastRunTime.ToUniversalTime().ToString("o")}else{$null}
+      listener_8769=@(Get-ListenerIdentity 8769)
+      host_probe_succeeded=$false
+    }
+    Write-JsonNoBom (Join-Path $EvidenceRoot "m10-host-supervisor-failure.json") $failure
+    throw "M10_HOST_8769_MCP_PROOF_FAILED"
+  }
   Write-Journal "M10_HOST_8769_EMERGENCY_READY"
 
   $dedicatedInspect=(& docker.exe inspect $DedicatedContainer | ConvertFrom-Json)[0]
@@ -283,7 +313,7 @@ services:
   [IO.File]::WriteAllText($DedicatedOverride,(($lines -join "`n")+"`n"),[Text.UTF8Encoding]::new($false))
   & docker.exe compose -p haios-operator-dedicated-tunnel -f $DedicatedCompose -f $DedicatedOverride up -d --no-deps --no-build --force-recreate operator-dedicated-tunnel-client
   if($LASTEXITCODE -ne 0){throw "M10_DEDICATED_TUNNEL_SWITCH_FAILED"}
-  $DedicatedReadiness=Wait-TunnelFunctionalReady $DedicatedContainer 8079 "http://host.docker.internal:8769/healthz" 60
+  $DedicatedReadiness=Wait-TunnelFunctionalReady $DedicatedContainer 8079 "http://host.docker.internal:8769/mcp" 60
   Write-JsonNoBom (Join-Path $EvidenceRoot "dedicated-tunnel-functional-readiness.json") $DedicatedReadiness
   Remove-Item Env:HAIOS_OPERATOR_TUNNEL_RUNTIME_KEY_FILE -ErrorAction SilentlyContinue
   $dedicatedPost=(& docker.exe inspect $DedicatedContainer | ConvertFrom-Json)[0]
