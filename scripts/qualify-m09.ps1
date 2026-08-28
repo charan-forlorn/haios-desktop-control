@@ -52,6 +52,12 @@ function Get-LabeledNetworkResidue([string]$Label) {
   $Ids = @(& docker.exe network ls -q --filter "label=$Label" 2>$null); Require-Exit "DOCKER_NETWORK_RESIDUE_QUERY"
   @($Ids | Where-Object { $_ -and $_.Trim() })
 }
+function Get-M09RuntimeResidue {
+  $RuntimeBase = Join-Path $Root "runtime"
+  if (-not (Test-Path -LiteralPath $RuntimeBase)) { return @() }
+  @((Get-ChildItem -LiteralPath $RuntimeBase -Directory -Force -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -like "m09-qual-*" } | ForEach-Object { $_.FullName }))
+}
 function Get-DeterministicSourceManifestLines {
   $Paths = [string[]]@(git ls-files); [Array]::Sort($Paths, [StringComparer]::Ordinal)
   foreach ($Relative in $Paths) {
@@ -107,6 +113,7 @@ if (Test-Port $ProxyPort) { throw "M09_PROXY_PORT_18773_NOT_FREE" }
 if ((Get-LabeledContainerResidue "haios.m09.owner=host-parity").Count -ne 0) { throw "M09_PREEXISTING_CONTAINER_RESIDUE" }
 if ((Get-LabeledContainerResidue "haios.m07.owner=m07").Count -ne 0) { throw "M09_PREEXISTING_M07_CONTAINER_RESIDUE" }
 if ((Get-LabeledNetworkResidue "haios.m07.owner=m07").Count -ne 0) { throw "M09_PREEXISTING_M07_NETWORK_RESIDUE" }
+if ((Get-M09RuntimeResidue).Count -ne 0) { throw "M09_PREEXISTING_RUNTIME_RESIDUE" }
 
 $ManifestPrePath = Join-Path $EvidenceRoot "source-manifest-precondition.txt"
 $ManifestPreDigest = Write-DeterministicSourceManifest $ManifestPrePath
@@ -196,6 +203,7 @@ if ((Get-LabeledContainerResidue "haios.m07.owner=m07").Count -ne 0) { throw "M0
 if ((Get-LabeledNetworkResidue "haios.m07.owner=m07").Count -ne 0) { throw "M09_M07_NETWORK_RESIDUE" }
 Remove-Item -LiteralPath $RuntimeRoot -Recurse -Force -ErrorAction SilentlyContinue
 if (Test-Path -LiteralPath $RuntimeRoot) { throw "M09_RUNTIME_RESIDUE" }
+if ((Get-M09RuntimeResidue).Count -ne 0) { throw "M09_RUNTIME_RESIDUE" }
 if (Test-Port $DirectPort) { throw "M09_PORT_8773_POSTSTATE_FAILED" }
 if (Test-Port $ProxyPort) { throw "M09_PROXY_PORT_18773_POSTSTATE_FAILED" }
 

@@ -96,6 +96,8 @@ describe("M09 qualification fail-closed contract", () => {
       "WORKTREE_NOT_CLEAN",
       "M08_FINAL_CERTIFICATION_BOUND",
       "M09_PREEXISTING_LONG_LIVED_OPERATOR_NOT_EMERGENCY",
+      "M09_PREEXISTING_RUNTIME_RESIDUE",
+      "Get-M09RuntimeResidue",
       "long_lived_container_integrity",
       "full_regression_started",
       "Sort-Object Destination,Type",
