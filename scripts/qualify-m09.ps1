@@ -97,6 +97,7 @@ if ($TunnelInspect.Config.Image -and $TunnelInspect.Config.Image -ne $TunnelImag
 
 $ContainerPre = @{}
 foreach ($Name in $LongLivedContainers) { $ContainerPre[$Name] = Get-ContainerIntegrityDigest $Name }
+$ContainerPreEvidence = @($LongLivedContainers | ForEach-Object { [ordered]@{ name=$_; sha256=$ContainerPre[$_] } })
 $Listener8768Pre = @(Get-ListenerIdentity 8768)
 $Listener8769Pre = @(Get-ListenerIdentity 8769)
 if ($Listener8768Pre.Count -eq 0) { throw "SECURE_MCP_8768_REGRESSION" }
@@ -122,6 +123,8 @@ if ($ObservedMode -ne "READ_ONLY_EMERGENCY") {
     m08_final_certification_sha256=$M08CertSha
     source_manifest_digest=$ManifestPreDigest
     listener_8768=@($Listener8768Pre); listener_8769=@($Listener8769Pre)
+    long_lived_container_integrity=@($ContainerPreEvidence)
+    full_regression_started=$false; live_helper_started=$false; independent_review_started=$false
     direct_port_8773_free=$true; proxy_port_18773_free=$true
     disposable_active_started=$false; production_mutation_performed=$false
     production_restart_performed=$false; tunnel_cutover_performed=$false
