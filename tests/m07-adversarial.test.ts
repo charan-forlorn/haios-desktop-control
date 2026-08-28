@@ -89,4 +89,11 @@ describe("M07 adversarial authority boundaries", () => {
     expect(script).toContain("[StringComparer]::Ordinal");
     expect(script).not.toContain("docker pull");
   });
+
+  it("binds live patch preimage to transaction worktree bytes", async () => {
+    const helper = await read("scripts/live-m07-qualification.mjs");
+    expect(helper).toContain('worktreeBuildBytes = await readFile(join(worktreePath, "scripts/build.mjs"))');
+    expect(helper).toContain('sha256(worktreeBuildBytes)');
+    expect(helper).not.toContain('sha256(baselineBuild)');
+  });
 });

@@ -58,13 +58,14 @@ const baselineHead = await git.head(canonical);
 const begin = await service.begin("demo", canonical);
 if (begin.decision !== "ALLOW") throw new Error(`BEGIN:${JSON.stringify(begin)}`);
 const txId = begin.transaction.txId;
-const staged = await service.stagePatch(txId, "scripts/build.mjs", sha256(baselineBuild), b64(modifiedBuild));
+const worktreePath = begin.transaction.worktreePath;
+const worktreeBuildBytes = await readFile(join(worktreePath, "scripts/build.mjs"));
+const staged = await service.stagePatch(txId, "scripts/build.mjs", sha256(worktreeBuildBytes), b64(modifiedBuild));
 if (staged.decision !== "ALLOW") throw new Error(`STAGE:${JSON.stringify(staged)}`);
 const validated = await service.validate(txId);
 if (validated.decision !== "ALLOW") throw new Error(`VALIDATE:${JSON.stringify(validated)}`);
 const applied = await service.apply(txId);
 if (applied.decision !== "ALLOW" || applied.state !== "APPLIED") throw new Error(`APPLY:${JSON.stringify(applied)}`);
-const worktreePath = applied.transaction.worktreePath;
 if ((await git.head(canonical)) !== baselineHead || (await git.status(canonical)) !== "") {
   throw new Error("CANONICAL_CHANGED_DURING_APPLY");
 }
