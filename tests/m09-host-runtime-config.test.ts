@@ -131,13 +131,13 @@ describe("M09 host launch config boundary", () => {
     expect(projectReads).toBe(0);
 
     const throwingProxy = new Proxy(validConfig(), {
-      getPrototypeOf() { throw new Error("SENSITIVE-PROXY-TRAP"); },
+      getPrototypeOf() { throw new Error("M09_ATTACKER_CONTROLLED_SECRET"); },
     });
     expect(() => validateHostOperatorLaunchConfig(throwingProxy)).toThrow("M09_HOST_CONFIG_INVALID");
     try {
       validateHostOperatorLaunchConfig(throwingProxy);
     } catch (error) {
-      expect((error as Error).message).not.toContain("SENSITIVE-PROXY-TRAP");
+      expect((error as Error).message).toBe("M09_HOST_CONFIG_INVALID");
     }
   });
 

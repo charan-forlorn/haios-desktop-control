@@ -23,7 +23,8 @@ const REQUIRED_CONFIG_KEYS = ["apiKeyFile", "worktreeRoot", "allowedProjects", "
 const MAX_PROJECT_ID_LENGTH = 128;
 const FORBIDDEN_PROJECT_IDS = new Set(["__proto__", "prototype", "constructor"]);
 
-function fail(code: string): never { throw new Error(code); }
+class M09BoundaryError extends Error {}
+function fail(code: string): never { throw new M09BoundaryError(code); }
 function snapshotPlainDataObject(value: unknown): Record<string, unknown> {
   try {
     if (typeof value !== "object" || value === null || Object.getPrototypeOf(value) !== Object.prototype) {
@@ -39,7 +40,7 @@ function snapshotPlainDataObject(value: unknown): Record<string, unknown> {
     }
     return snapshot;
   } catch (error) {
-    if (error instanceof Error && error.message.startsWith("M09_")) throw error;
+    if (error instanceof M09BoundaryError) throw error;
     fail("M09_HOST_CONFIG_INVALID");
   }
 }
@@ -138,7 +139,7 @@ export async function loadHostApiKey(path: string): Promise<string> {
       fail("M09_API_KEY_FILE_INVALID");
     }
   } catch (error) {
-    if (error instanceof Error && error.message === "M09_API_KEY_FILE_INVALID") throw error;
+    if (error instanceof M09BoundaryError) throw error;
     fail("M09_API_KEY_FILE_INVALID");
   } finally {
     await handle.close().catch(() => undefined);
