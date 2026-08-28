@@ -65,7 +65,7 @@ The pre-live package prepares but does not execute a transactional activation:
 - verify `operator-canary` root/branch/current HEAD and clean tracked state;
 - materialize a sealed deployment at the exact M11 commit;
 - create M11 state/config without changing the M10 key bytes;
-- register an M11 scheduled task but do not start it before the Human gate;
+- register an M11 scheduled task bound to an M11-specific bounded supervisor, but do not start it before the Human gate;
 - at activation, stop M10 task, free `:8769`, start M11 ACTIVE task, and authenticate exact 13-tool/status/capability probes;
 - keep the dedicated tunnel route unchanged because its backend remains `host.docker.internal:8769`.
 

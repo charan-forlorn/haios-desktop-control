@@ -53,6 +53,8 @@
 - Create: `scripts/preflight-m11-active-canary.ps1`
 - Create: `scripts/execute-m11-active-canary.ps1`
 - Create: `scripts/rollback-m11-active-canary.ps1`
+- Create: `scripts/run-m11-active-canary-supervisor.mjs`
+- Create: `scripts/probe-m11-active-canary-host.mjs`
 - Test: `tests/m11-activation-transaction.test.ts`
 
 **Produces:** static/pre-live package only; execution requires exact Human decision and current M10 final certification.
