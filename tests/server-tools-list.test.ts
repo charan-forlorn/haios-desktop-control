@@ -24,6 +24,14 @@ const EXPECTED_TOOLS = [
   "git_status",
   "git_diff",
   "git_log",
+  "transaction_begin",
+  "transaction_stage_create",
+  "transaction_stage_replace",
+  "transaction_stage_move",
+  "transaction_validate",
+  "transaction_apply",
+  "transaction_rollback",
+  "transaction_status",
 ];
 
 function fakeUpstream(): DesktopCommanderReadClient {
@@ -69,7 +77,7 @@ async function connect(apiKey = "test-key") {
   return { address, client };
 }
 
-describe("M02 Streamable HTTP gateway", () => {
+describe("M03 Streamable HTTP gateway", () => {
   it("rejects missing authentication with HTTP 401", async () => {
     runtime = await createGatewayServer({
       apiKey: "test-key",

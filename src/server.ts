@@ -14,6 +14,7 @@ import { authenticateApiKey } from "./auth.js";
 import {
   classifyGatewayTool,
   EXECUTE_TOOL_DEFINITIONS,
+  MUTATE_TOOL_DEFINITIONS,
   READ_TOOL_DEFINITIONS,
 } from "./capabilities.js";
 import { dispatchExecuteTool } from "./execute.js";
@@ -118,10 +119,18 @@ Object.assign(INPUT_SCHEMAS, {
   git_status: objectSchema(),
   git_diff: objectSchema({ mode: { type: "string", enum: ["working", "staged"] } }),
   git_log: objectSchema({ maxCount: { ...INTEGER, minimum: 1, maximum: 20 } }),
+  transaction_begin: objectSchema(),
+  transaction_stage_create: objectSchema({ transactionId: STRING, path: STRING, content: STRING }, ["transactionId", "path", "content"]),
+  transaction_stage_replace: objectSchema({ transactionId: STRING, path: STRING, expectedSha256: STRING, content: STRING }, ["transactionId", "path", "expectedSha256", "content"]),
+  transaction_stage_move: objectSchema({ transactionId: STRING, sourcePath: STRING, destinationPath: STRING }, ["transactionId", "sourcePath", "destinationPath"]),
+  transaction_validate: objectSchema({ transactionId: STRING }, ["transactionId"]),
+  transaction_apply: objectSchema({ transactionId: STRING }, ["transactionId"]),
+  transaction_rollback: objectSchema({ transactionId: STRING }, ["transactionId"]),
+  transaction_status: objectSchema({ transactionId: STRING }, ["transactionId"]),
 });
 
 function publicTools(): Tool[] {
-  return [...READ_TOOL_DEFINITIONS, ...EXECUTE_TOOL_DEFINITIONS].map(
+  return [...READ_TOOL_DEFINITIONS, ...EXECUTE_TOOL_DEFINITIONS, ...MUTATE_TOOL_DEFINITIONS].map(
     ({ name, capabilityClass }) => ({
       name,
       description: `HAIOS ${capabilityClass} wrapper: ${name}`,
@@ -169,11 +178,13 @@ export async function createGatewayServer(
 
       try {
         const result =
-          capabilityClass === "EXECUTE"
-            ? isExecuteClient(config.upstream)
-              ? await dispatchExecuteTool(name, args, { upstream: config.upstream })
-              : { decision: "DENY" as const, reason: "EXECUTE_UPSTREAM_UNAVAILABLE" }
-            : await dispatchReadTool(name, args, { upstream: config.upstream });
+          capabilityClass === "MUTATE"
+            ? { decision: "DENY" as const, reason: "MUTATE_NOT_IMPLEMENTED" }
+            : capabilityClass === "EXECUTE"
+              ? isExecuteClient(config.upstream)
+                ? await dispatchExecuteTool(name, args, { upstream: config.upstream })
+                : { decision: "DENY" as const, reason: "EXECUTE_UPSTREAM_UNAVAILABLE" }
+              : await dispatchReadTool(name, args, { upstream: config.upstream });
         decision = result.decision;
         resultClass =
           result.decision === "DENY"

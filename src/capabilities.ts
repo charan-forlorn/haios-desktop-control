@@ -1,13 +1,13 @@
-export type GatewayCapabilityClass = "READ" | "EXECUTE" | "UNKNOWN";
+export type GatewayCapabilityClass = "READ" | "EXECUTE" | "MUTATE" | "UNKNOWN";
 
 export interface GatewayToolDefinition {
   readonly name: string;
-  readonly capabilityClass: "READ" | "EXECUTE";
+  readonly capabilityClass: "READ" | "EXECUTE" | "MUTATE";
 }
 
 function defineTool(
   name: string,
-  capabilityClass: "READ" | "EXECUTE",
+  capabilityClass: "READ" | "EXECUTE" | "MUTATE",
 ): Readonly<GatewayToolDefinition> {
   return Object.freeze({ name, capabilityClass });
 }
@@ -37,15 +37,31 @@ export const EXECUTE_TOOL_DEFINITIONS: readonly Readonly<GatewayToolDefinition>[
     defineTool("git_log", "EXECUTE"),
   ]);
 
+export const MUTATE_TOOL_DEFINITIONS: readonly Readonly<GatewayToolDefinition>[] =
+  Object.freeze([
+    defineTool("transaction_begin", "MUTATE"),
+    defineTool("transaction_stage_create", "MUTATE"),
+    defineTool("transaction_stage_replace", "MUTATE"),
+    defineTool("transaction_stage_move", "MUTATE"),
+    defineTool("transaction_validate", "MUTATE"),
+    defineTool("transaction_apply", "MUTATE"),
+    defineTool("transaction_rollback", "MUTATE"),
+    defineTool("transaction_status", "MUTATE"),
+  ]);
+
 const READ_TOOL_NAMES: ReadonlySet<string> = new Set(
   READ_TOOL_DEFINITIONS.map(({ name }) => name),
 );
 const EXECUTE_TOOL_NAMES: ReadonlySet<string> = new Set(
   EXECUTE_TOOL_DEFINITIONS.map(({ name }) => name),
 );
+const MUTATE_TOOL_NAMES: ReadonlySet<string> = new Set(
+  MUTATE_TOOL_DEFINITIONS.map(({ name }) => name),
+);
 
 export function classifyGatewayTool(name: string): GatewayCapabilityClass {
   if (READ_TOOL_NAMES.has(name)) return "READ";
   if (EXECUTE_TOOL_NAMES.has(name)) return "EXECUTE";
+  if (MUTATE_TOOL_NAMES.has(name)) return "MUTATE";
   return "UNKNOWN";
 }
