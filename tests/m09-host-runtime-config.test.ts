@@ -139,6 +139,19 @@ describe("M09 host launch config boundary", () => {
     } catch (error) {
       expect((error as Error).message).toBe("M09_HOST_CONFIG_INVALID");
     }
+
+    let captured: Error | undefined;
+    try {
+      validateHostOperatorLaunchConfig({ ...validConfig(), port: 1 });
+    } catch (error) {
+      captured = error as Error;
+    }
+    expect(captured).toBeInstanceOf(Error);
+    captured!.message = "M09_ATTACKER_CONTROLLED_REUSED_ERROR";
+    const reusedErrorProxy = new Proxy(validConfig(), {
+      getPrototypeOf() { throw captured!; },
+    });
+    expect(() => validateHostOperatorLaunchConfig(reusedErrorProxy)).toThrow("M09_HOST_CONFIG_INVALID");
   });
 
   it("accepts only integer ports from 1024 through 65535", () => {
