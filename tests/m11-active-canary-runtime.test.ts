@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,15 +17,20 @@ import { OPERATOR_V1_TOOL_NAMES } from "../src/operator/protocol.js";
 
 const roots: string[] = [];
 const API_KEY = "M11-UNIT-KEY-123456789";
+const ORIGINAL_LOCAL_APP_DATA = process.env.LOCALAPPDATA;
 
 async function config() {
   const root = await mkdtemp(join(tmpdir(), "m11-runtime-"));
   roots.push(root);
-  const apiKeyFile = join(root, "api-key.txt");
+  process.env.LOCALAPPDATA = root;
+  const apiKeyFile = join(root, "HAIOS", "M10", "operator-api-key");
+  const worktreeRoot = join(root, "HAIOS", "M11", "worktrees");
+  await mkdir(join(root, "HAIOS", "M10"), { recursive: true });
+  await mkdir(worktreeRoot, { recursive: true });
   await writeFile(apiKeyFile, API_KEY, "utf8");
   return {
     apiKeyFile,
-    worktreeRoot: join(root, "worktrees"),
+    worktreeRoot,
     allowedProjects: { "operator-canary": "C:\\Workspace\\haios-operator-canary" },
     port: 8769,
     mode: "ACTIVE",
@@ -34,6 +39,8 @@ async function config() {
 }
 
 afterEach(async () => {
+  if (ORIGINAL_LOCAL_APP_DATA === undefined) delete process.env.LOCALAPPDATA;
+  else process.env.LOCALAPPDATA = ORIGINAL_LOCAL_APP_DATA;
   for (const root of roots.splice(0).reverse()) await rm(root, { recursive: true, force: true });
 });
 

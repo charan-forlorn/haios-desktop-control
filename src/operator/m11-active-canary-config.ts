@@ -4,6 +4,19 @@ export const M11_ACTIVE_CANARY_PRODUCTION_PORT = 8769 as const;
 export const M11_ACTIVE_CANARY_PROJECT_ID = "operator-canary" as const;
 export const M11_ACTIVE_CANARY_PROJECT_ROOT = "C:\\Workspace\\haios-operator-canary" as const;
 
+function expectedProductionPaths() {
+  const localAppData = process.env.LOCALAPPDATA;
+  if (!localAppData) deny();
+  return Object.freeze({
+    apiKeyFile: win32.join(localAppData, "HAIOS", "M10", "operator-api-key"),
+    worktreeRoot: win32.join(localAppData, "HAIOS", "M11", "worktrees"),
+  });
+}
+
+function sameWindowsPath(left: string, right: string): boolean {
+  return win32.normalize(left).toLowerCase() === win32.normalize(right).toLowerCase();
+}
+
 declare const m11ActiveCanaryConfigBrand: unique symbol;
 
 export interface M11ActiveCanaryConfig {
@@ -63,6 +76,7 @@ function isAbsoluteWindowsPath(value: unknown): value is string {
 export function validateM11ActiveCanaryConfig(value: unknown): M11ActiveCanaryConfig {
   const config = snapshotPlainDataObject(value);
   const keys = Object.keys(config);
+  const expected = expectedProductionPaths();
   if (
     keys.length !== CONFIG_KEYS.size
     || keys.some((key) => !CONFIG_KEYS.has(key))
@@ -74,6 +88,8 @@ export function validateM11ActiveCanaryConfig(value: unknown): M11ActiveCanaryCo
     || !Object.hasOwn(config, "activationScope")
     || !isAbsoluteWindowsPath(config.apiKeyFile)
     || !isAbsoluteWindowsPath(config.worktreeRoot)
+    || !sameWindowsPath(config.apiKeyFile, expected.apiKeyFile)
+    || !sameWindowsPath(config.worktreeRoot, expected.worktreeRoot)
     || typeof config.port !== "number"
     || config.port !== M11_ACTIVE_CANARY_PRODUCTION_PORT
     || config.mode !== "ACTIVE"
@@ -88,8 +104,8 @@ export function validateM11ActiveCanaryConfig(value: unknown): M11ActiveCanaryCo
   ) deny();
 
   return Object.freeze({
-    apiKeyFile: config.apiKeyFile,
-    worktreeRoot: config.worktreeRoot,
+    apiKeyFile: expected.apiKeyFile,
+    worktreeRoot: expected.worktreeRoot,
     allowedProjects: Object.freeze({
       [M11_ACTIVE_CANARY_PROJECT_ID]: M11_ACTIVE_CANARY_PROJECT_ROOT,
     }),

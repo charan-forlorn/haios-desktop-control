@@ -166,3 +166,35 @@ describe("M11 authenticated ACTIVE host probe", () => {
     expect(probe).not.toContain('projectId: "operator-canary"');
   });
 });
+
+describe("M11 independent-review remediation contracts", () => {
+  it("hard-binds the trusted M10 final-cert location and proof identities", async () => {
+    const [preflight, execute, rollback] = await sources();
+    const exactCert = "C:\\Workspace\\haios-desktop-control-m10\\evidence\\m10\\final\\m10-final-certification.json";
+    const m10Head = "f476f719be42ee40fe6ae5358930dc1662a95d3e";
+    const m10Manifest = "8582819a33800d9949011f6ac07b07248b163fa19ddd8d3fd1d1e47bddd7a36f";
+    for (const source of [preflight, execute, rollback]) {
+      expect(source).toContain(exactCert);
+      expect(source).toContain(m10Head);
+      expect(source).toContain(m10Manifest);
+      expect(source).toContain("remote_dispatch_proof_sha256");
+      expect(source).toContain("route_divergence_proof_sha256");
+    }
+    const preflightParams = preflight.match(/^param\([\s\S]*?\)\r?\n/u)?.[0] ?? "";
+    expect(preflightParams).not.toContain("$M10FinalCertification");
+    expect(execute).toContain("M10_FINAL_CERT_PATH_MISMATCH");
+  });
+
+  it("restores M10 before non-critical M11 cleanup and verifies the canary preimage", async () => {
+    const [, , rollback] = await sources();
+    const restart = rollback.indexOf("Start-ScheduledTask -TaskName $M10Task");
+    const deploymentCleanup = rollback.indexOf("M11_DEPLOYMENT_REMOVE_FAILED");
+    const stateCleanup = rollback.indexOf("M11_STATE_REMOVE_FAILED");
+    expect(restart).toBeGreaterThan(0);
+    expect(deploymentCleanup).toBeGreaterThan(restart);
+    expect(stateCleanup).toBeGreaterThan(restart);
+    expect(rollback).toContain("M11_ROLLBACK_CANARY_PREIMAGE_DRIFT");
+    expect(rollback).toContain("git.exe -C $CanaryRoot rev-parse HEAD");
+    expect(rollback).toContain("git.exe -C $CanaryRoot status --porcelain");
+  });
+});

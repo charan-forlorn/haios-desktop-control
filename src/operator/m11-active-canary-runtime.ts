@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { realpath } from "node:fs/promises";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { createGatewayServer, type GatewayRuntime } from "../server.js";
@@ -192,8 +193,23 @@ function validateDisposableFixtureConfig(value: unknown): M11DisposableFixtureCo
     activationScope: "M11_DISPOSABLE_FIXTURE_ONLY" as const,
   });
 }
+async function assertDisposableFixtureRealpathContainment(config: M11DisposableFixtureConfig): Promise<void> {
+  const paths = runtimeIdentityPaths();
+  const fixtureBase = await realpath(resolve(paths.root, "runtime", "m11-fixture")).catch(fixtureDeny);
+  for (const candidate of [config.apiKeyFile, config.worktreeRoot, config.canonicalRoot]) {
+    const resolved = await realpath(candidate).catch(fixtureDeny);
+    const rel = relative(fixtureBase, resolved);
+    if (rel === "" || rel === ".." || rel.startsWith(`..${requireSeparator()}`) || isAbsolute(rel)) fixtureDeny();
+  }
+}
+
+function requireSeparator(): string {
+  return process.platform === "win32" ? "\\" : "/";
+}
+
 export async function createM11DisposableFixtureRuntime(config: unknown): Promise<GatewayRuntime> {
   const validated = validateDisposableFixtureConfig(config);
+  await assertDisposableFixtureRealpathContainment(validated);
   const paths = runtimeIdentityPaths();
   const [apiKey, operatorRuntime] = await Promise.all([
     loadM11ActiveCanaryApiKey(validated.apiKeyFile),

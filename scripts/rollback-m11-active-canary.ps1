@@ -10,6 +10,11 @@ if($PSVersionTable.PSVersion.Major -lt 7){throw "POWERSHELL_7_REQUIRED"}
 $Root=(Resolve-Path (Split-Path -Parent $PSScriptRoot)).Path
 $ExactDecision="APPROVE HAIOS_DESKTOP_CONTROL_PLANE_R1_M11_ACTIVE_CANARY_ACTIVATION"
 $M10FinalTerminal="HAIOS_DESKTOP_CONTROL_PLANE_R1_M10_STAGED_READ_ONLY_CUTOVER_QUALIFIED"
+$M10FinalCertification="C:\Workspace\haios-desktop-control-m10\evidence\m10\final\m10-final-certification.json"
+$M10CertifiedHead="f476f719be42ee40fe6ae5358930dc1662a95d3e"
+$M10CertifiedManifest="8582819a33800d9949011f6ac07b07248b163fa19ddd8d3fd1d1e47bddd7a36f"
+$M10RemoteDispatchProof="C:\Workspace\haios-desktop-control-m10\evidence\m10\final\remote-dispatch-proof.json"
+$M10RouteDivergenceProof="C:\Workspace\haios-desktop-control-m10\evidence\m10\final\route-divergence-proof.json"
 $CanaryRoot="C:\Workspace\haios-operator-canary"
 $DeploymentRoot="C:\Workspace\haios-desktop-control-m11-runtime"
 $StateRoot=Join-Path $env:LOCALAPPDATA "HAIOS\M11"
@@ -44,6 +49,11 @@ if(-not(Test-Path -LiteralPath $ExecutionJournal)){Block "JOURNAL_MISSING"}
 $Envelope=Get-Content -Raw -LiteralPath $DecisionEnvelope | ConvertFrom-Json
 if([string]$Envelope.required_human_decision -ne $ExactDecision){Block "DECISION_MISMATCH"}
 if([string]$Envelope.m10_final_terminal -ne $M10FinalTerminal){Block "M10_FINAL_TERMINAL_MISMATCH"}
+if([IO.Path]::GetFullPath([string]$Envelope.m10_final_cert_path) -ne $M10FinalCertification){Block "M10_FINAL_CERT_PATH_MISMATCH"}
+if([string]$Envelope.m10_certified_head -ne $M10CertifiedHead -or [string]$Envelope.m10_certified_manifest_sha256 -ne $M10CertifiedManifest){Block "M10_CERTIFIED_IDENTITY_MISMATCH"}
+if([IO.Path]::GetFullPath([string]$Envelope.remote_dispatch_proof_path) -ne $M10RemoteDispatchProof -or [IO.Path]::GetFullPath([string]$Envelope.route_divergence_proof_path) -ne $M10RouteDivergenceProof){Block "M10_FINAL_PROOF_PATH_MISMATCH"}
+# remote_dispatch_proof_sha256 and route_divergence_proof_sha256 remain sealed in the activation envelope.
+if([string]::IsNullOrWhiteSpace([string]$Envelope.remote_dispatch_proof_sha256) -or [string]::IsNullOrWhiteSpace([string]$Envelope.route_divergence_proof_sha256)){Block "M10_FINAL_PROOF_IDENTITY_MISSING"}
 if([string]$Envelope.canary_root -ne $CanaryRoot){Block "CANARY_ROOT_MISMATCH"}
 if([string]$Envelope.m10_task_name -ne $M10Task -or [string]$Envelope.m11_task_name -ne $M11Task){Block "TASK_IDENTITY_MISMATCH"}
 if(-not(Test-Path -LiteralPath $M10ApiKeyFile)){Block "M10_API_KEY_MISSING"}
@@ -58,17 +68,9 @@ if($m11TaskObject){
   $action=@($m11TaskObject.Actions)[0]
   if(-not([string]$action.Arguments).Contains("run-m11-active-canary-supervisor.mjs")){Block "M11_TASK_IDENTITY_DRIFT"}
   Stop-ScheduledTask -TaskName $M11Task -ErrorAction SilentlyContinue
-  Unregister-ScheduledTask -TaskName $M11Task -Confirm:$false
 }
 
-if(Test-Path -LiteralPath $DeploymentRoot){
-  & git.exe -C $Root worktree remove --force $DeploymentRoot
-  if($LASTEXITCODE -ne 0 -or (Test-Path -LiteralPath $DeploymentRoot)){Block "M11_DEPLOYMENT_REMOVE_FAILED"}
-}
-if(Test-Path -LiteralPath $StateRoot){
-  Remove-Item -LiteralPath $StateRoot -Recurse -Force
-  if(Test-Path -LiteralPath $StateRoot){Block "M11_STATE_REMOVE_FAILED"}
-}
+# Recovery-first: restore certified M10 before any non-critical M11 cleanup.
 $m10TaskObject=Get-ScheduledTask -TaskName $M10Task -ErrorAction SilentlyContinue
 if(-not $m10TaskObject){Block "M10_TASK_MISSING"}
 $m10Action=@($m10TaskObject.Actions)[0]
@@ -87,6 +89,22 @@ do{
 }while([DateTime]::UtcNow -lt $deadline)
 if(-not $restored){Block "M10_READ_ONLY_EMERGENCY_RESTORE_FAILED"}
 $ExpectedRestoredMode="READ_ONLY_EMERGENCY"
+
+$canaryHead=(& git.exe -C $CanaryRoot rev-parse HEAD).Trim()
+$canaryStatus=(& git.exe -C $CanaryRoot status --porcelain)
+if($LASTEXITCODE -ne 0 -or $canaryHead -ne [string]$Envelope.canary_head -or $canaryStatus.Length -ne 0){Block "M11_ROLLBACK_CANARY_PREIMAGE_DRIFT"}
+
+# Non-critical cleanup occurs only after M10 recovery is proven.
+$m11TaskObject=Get-ScheduledTask -TaskName $M11Task -ErrorAction SilentlyContinue
+if($m11TaskObject){Unregister-ScheduledTask -TaskName $M11Task -Confirm:$false}
+if(Test-Path -LiteralPath $DeploymentRoot){
+  & git.exe -C $Root worktree remove --force $DeploymentRoot
+  if($LASTEXITCODE -ne 0 -or (Test-Path -LiteralPath $DeploymentRoot)){Block "M11_DEPLOYMENT_REMOVE_FAILED"}
+}
+if(Test-Path -LiteralPath $StateRoot){
+  Remove-Item -LiteralPath $StateRoot -Recurse -Force
+  if(Test-Path -LiteralPath $StateRoot){Block "M11_STATE_REMOVE_FAILED"}
+}
 
 if((Get-ContainerDigest $DedicatedTunnel) -ne [string]$Envelope.dedicated_tunnel_sha256){Block "DEDICATED_TUNNEL_DRIFT"}
 if((Get-ContainerDigest $SharedTunnel) -ne [string]$Envelope.shared_tunnel_sha256){Block "SHARED_TUNNEL_DRIFT"}

@@ -1,4 +1,4 @@
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -72,5 +72,25 @@ describe("M11 disposable ACTIVE qualification helper", () => {
       "Start-ScheduledTask", "Stop-ScheduledTask", "Register-ScheduledTask", "Unregister-ScheduledTask",
       "docker compose", "docker system prune", "git push", "git fetch", "git pull",
     ]) expect(source.toLowerCase()).not.toContain(forbidden.toLowerCase());
+  });
+});
+
+describe("M11 disposable fixture filesystem containment", () => {
+  it("rejects junction or symlink escape outside runtime/m11-fixture", async () => {
+    const config = await fixture();
+    const target = join(process.cwd(), "runtime", `m11-fixture-escape-target-${process.pid}-${Date.now()}`);
+    roots.push(target);
+    await mkdir(target, { recursive: true });
+    const escape = join((config.canonicalRoot as string), "..", "escape-link");
+    await symlink(target, escape, "junction");
+    await expect(createM11DisposableFixtureRuntime({ ...config, canonicalRoot: escape }))
+      .rejects.toThrow("M11_DISPOSABLE_FIXTURE_CONFIG_DENIED");
+  });
+
+  it("requires unconditional runtime-root cleanup around the whole qualification", async () => {
+    const helper = await readFile(join(process.cwd(), "scripts", "live-m11-disposable-active.mjs"), "utf8");
+    expect(helper).toContain("async function runQualification()");
+    expect(helper).toContain("await runQualification()");
+    expect(helper).toMatch(/finally\s*\{[\s\S]*await rm\(runtimeRoot, \{ recursive: true, force: true \}\)/u);
   });
 });

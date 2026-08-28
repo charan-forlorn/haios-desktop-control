@@ -12,6 +12,11 @@ $DecisionEnvelope=[IO.Path]::GetFullPath($DecisionEnvelope)
 $EvidenceRoot=[IO.Path]::GetFullPath($EvidenceRoot)
 $ExactDecision="APPROVE HAIOS_DESKTOP_CONTROL_PLANE_R1_M11_ACTIVE_CANARY_ACTIVATION"
 $M10FinalTerminal="HAIOS_DESKTOP_CONTROL_PLANE_R1_M10_STAGED_READ_ONLY_CUTOVER_QUALIFIED"
+$M10FinalCertification="C:\Workspace\haios-desktop-control-m10\evidence\m10\final\m10-final-certification.json"
+$M10CertifiedHead="f476f719be42ee40fe6ae5358930dc1662a95d3e"
+$M10CertifiedManifest="8582819a33800d9949011f6ac07b07248b163fa19ddd8d3fd1d1e47bddd7a36f"
+$M10RemoteDispatchProof="C:\Workspace\haios-desktop-control-m10\evidence\m10\final\remote-dispatch-proof.json"
+$M10RouteDivergenceProof="C:\Workspace\haios-desktop-control-m10\evidence\m10\final\route-divergence-proof.json"
 $CanaryRoot="C:\Workspace\haios-operator-canary"
 $DeploymentRoot="C:\Workspace\haios-desktop-control-m11-runtime"
 $StateRoot=Join-Path $env:LOCALAPPDATA "HAIOS\M11"
@@ -59,12 +64,20 @@ if([string]$Envelope.canary_root -ne $CanaryRoot){AuthorityFail "CANARY_ROOT_MIS
 if([string]$Envelope.m10_task_name -ne $M10Task -or [string]$Envelope.m11_task_name -ne $M11Task){AuthorityFail "TASK_IDENTITY_MISMATCH"}
 if([bool]$Envelope.tunnel_mutation_authorized -or [bool]$Envelope.m10_api_key_rotation_authorized){AuthorityFail "FORBIDDEN_AUTHORITY_PRESENT"}
 
-$m10Cert=[IO.Path]::GetFullPath([string]$Envelope.m10_final_cert_path)
+if([IO.Path]::GetFullPath([string]$Envelope.m10_final_cert_path) -ne $M10FinalCertification){AuthorityFail "M10_FINAL_CERT_PATH_MISMATCH"}
+$m10Cert=$M10FinalCertification
 if(-not(Test-Path -LiteralPath $m10Cert)){AuthorityFail "M10_FINAL_CERT_MISSING"}
 if((Get-Sha256 $m10Cert) -ne [string]$Envelope.m10_final_cert_sha256){AuthorityFail "M10_FINAL_CERT_DRIFT"}
 $cert=Get-Content -Raw -LiteralPath $m10Cert | ConvertFrom-Json
 $certTerminal=if($cert.PSObject.Properties.Name -contains 'terminal'){[string]$cert.terminal}elseif($cert.PSObject.Properties.Name -contains 'TERMINAL'){[string]$cert.TERMINAL}else{''}
 if($certTerminal -ne $M10FinalTerminal){AuthorityFail "M10_FINAL_CERT_NOT_QUALIFIED"}
+if([string]$cert.candidate_head -ne $M10CertifiedHead -or [string]$Envelope.m10_certified_head -ne $M10CertifiedHead){AuthorityFail "M10_FINAL_CERT_HEAD_MISMATCH"}
+if([string]$cert.candidate_manifest_sha256 -ne $M10CertifiedManifest -or [string]$Envelope.m10_certified_manifest_sha256 -ne $M10CertifiedManifest){AuthorityFail "M10_FINAL_CERT_MANIFEST_MISMATCH"}
+if([IO.Path]::GetFullPath([string]$Envelope.remote_dispatch_proof_path) -ne $M10RemoteDispatchProof){AuthorityFail "M10_REMOTE_DISPATCH_PROOF_PATH_MISMATCH"}
+if([IO.Path]::GetFullPath([string]$Envelope.route_divergence_proof_path) -ne $M10RouteDivergenceProof){AuthorityFail "M10_ROUTE_DIVERGENCE_PROOF_PATH_MISMATCH"}
+if(-not(Test-Path -LiteralPath $M10RemoteDispatchProof) -or -not(Test-Path -LiteralPath $M10RouteDivergenceProof)){AuthorityFail "M10_FINAL_PROOF_MISSING"}
+if((Get-Sha256 $M10RemoteDispatchProof) -ne [string]$Envelope.remote_dispatch_proof_sha256 -or (Get-Sha256 $M10RemoteDispatchProof) -ne [string]$cert.remote_dispatch_proof_sha256){AuthorityFail "M10_REMOTE_DISPATCH_PROOF_DRIFT"}
+if((Get-Sha256 $M10RouteDivergenceProof) -ne [string]$Envelope.route_divergence_proof_sha256 -or (Get-Sha256 $M10RouteDivergenceProof) -ne [string]$cert.route_divergence_proof_sha256){AuthorityFail "M10_ROUTE_DIVERGENCE_PROOF_DRIFT"}
 
 if((Get-Sha256 $PSCommandPath) -ne [string]$Envelope.executor_sha256){AuthorityFail "EXECUTOR_HASH_DRIFT"}
 if((Get-Sha256 $RollbackScript) -ne [string]$Envelope.rollback_sha256){AuthorityFail "ROLLBACK_HASH_DRIFT"}

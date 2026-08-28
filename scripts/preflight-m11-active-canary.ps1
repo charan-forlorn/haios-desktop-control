@@ -1,5 +1,4 @@
 param(
-  [Parameter(Mandatory=$true)][string]$M10FinalCertification,
   [Parameter(Mandatory=$true)][string]$EvidenceRoot
 )
 $ErrorActionPreference = "Stop"
@@ -8,9 +7,13 @@ if ($PSVersionTable.PSVersion.Major -lt 7) { throw "POWERSHELL_7_REQUIRED" }
 
 $Root = (Resolve-Path (Split-Path -Parent $PSScriptRoot)).Path
 $EvidenceRoot = [IO.Path]::GetFullPath($EvidenceRoot)
-$M10FinalCertification = [IO.Path]::GetFullPath($M10FinalCertification)
 $ExactDecision = "APPROVE HAIOS_DESKTOP_CONTROL_PLANE_R1_M11_ACTIVE_CANARY_ACTIVATION"
 $M10FinalTerminal = "HAIOS_DESKTOP_CONTROL_PLANE_R1_M10_STAGED_READ_ONLY_CUTOVER_QUALIFIED"
+$M10FinalCertification = "C:\Workspace\haios-desktop-control-m10\evidence\m10\final\m10-final-certification.json"
+$M10CertifiedHead = "f476f719be42ee40fe6ae5358930dc1662a95d3e"
+$M10CertifiedManifest = "8582819a33800d9949011f6ac07b07248b163fa19ddd8d3fd1d1e47bddd7a36f"
+$M10RemoteDispatchProof = "C:\Workspace\haios-desktop-control-m10\evidence\m10\final\remote-dispatch-proof.json"
+$M10RouteDivergenceProof = "C:\Workspace\haios-desktop-control-m10\evidence\m10\final\route-divergence-proof.json"
 $CanaryRoot = "C:\Workspace\haios-operator-canary"
 $M10Task = "HAIOS-M10-Operator-ReadOnly"
 $M11Task = "HAIOS-M11-Operator-Active-Canary"
@@ -45,9 +48,17 @@ function Get-ContainerDigest([string]$Name) {
   [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant()
 }
 if(-not(Test-Path -LiteralPath $M10FinalCertification)){throw "M11_M10_FINAL_CERT_MISSING"}
+if(-not(Test-Path -LiteralPath $M10RemoteDispatchProof)){throw "M11_M10_REMOTE_DISPATCH_PROOF_MISSING"}
+if(-not(Test-Path -LiteralPath $M10RouteDivergenceProof)){throw "M11_M10_ROUTE_DIVERGENCE_PROOF_MISSING"}
 $cert=Get-Content -Raw -LiteralPath $M10FinalCertification | ConvertFrom-Json
 $certTerminal=if($cert.PSObject.Properties.Name -contains 'terminal'){[string]$cert.terminal}elseif($cert.PSObject.Properties.Name -contains 'TERMINAL'){[string]$cert.TERMINAL}else{''}
 if($certTerminal -ne $M10FinalTerminal){throw "M11_M10_FINAL_CERT_NOT_QUALIFIED"}
+if([string]$cert.candidate_head -ne $M10CertifiedHead){throw "M11_M10_FINAL_CERT_HEAD_MISMATCH"}
+if([string]$cert.candidate_manifest_sha256 -ne $M10CertifiedManifest){throw "M11_M10_FINAL_CERT_MANIFEST_MISMATCH"}
+if([IO.Path]::GetFullPath([string]$cert.remote_dispatch_proof_path) -ne $M10RemoteDispatchProof){throw "M11_M10_REMOTE_DISPATCH_PROOF_PATH_MISMATCH"}
+if([IO.Path]::GetFullPath([string]$cert.route_divergence_proof_path) -ne $M10RouteDivergenceProof){throw "M11_M10_ROUTE_DIVERGENCE_PROOF_PATH_MISMATCH"}
+if((Get-Sha256 $M10RemoteDispatchProof) -ne [string]$cert.remote_dispatch_proof_sha256){throw "M11_M10_REMOTE_DISPATCH_PROOF_DRIFT"}
+if((Get-Sha256 $M10RouteDivergenceProof) -ne [string]$cert.route_divergence_proof_sha256){throw "M11_M10_ROUTE_DIVERGENCE_PROOF_DRIFT"}
 if(-not(Test-Path -LiteralPath $CanaryRoot -PathType Container)){throw "M11_CANARY_ROOT_MISSING"}
 if(-not(Test-Path -LiteralPath $M10ApiKeyFile -PathType Leaf)){throw "M11_M10_API_KEY_MISSING"}
 if(-not(Test-Path -LiteralPath $M10RuntimeRoot -PathType Container)){throw "M11_M10_RUNTIME_MISSING"}
@@ -95,6 +106,12 @@ $envelope=[ordered]@{
   m10_final_terminal=$M10FinalTerminal
   m10_final_cert_path=$M10FinalCertification
   m10_final_cert_sha256=Get-Sha256 $M10FinalCertification
+  m10_certified_head=$M10CertifiedHead
+  m10_certified_manifest_sha256=$M10CertifiedManifest
+  remote_dispatch_proof_path=$M10RemoteDispatchProof
+  remote_dispatch_proof_sha256=Get-Sha256 $M10RemoteDispatchProof
+  route_divergence_proof_path=$M10RouteDivergenceProof
+  route_divergence_proof_sha256=Get-Sha256 $M10RouteDivergenceProof
   candidate_head=$candidateHead
   candidate_manifest_sha256=$candidateManifest
   executor_sha256=Get-Sha256 $execute

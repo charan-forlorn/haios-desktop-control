@@ -53,6 +53,7 @@ async function stateSnapshot() {
     sharedTunnel: await containerDigest(sharedTunnel),
   };
 }
+async function runQualification() {
 await rm(runtimeRoot, { recursive: true, force: true });
 await mkdir(join(canonical, "src"), { recursive: true });
 await mkdir(join(canonical, "tests"), { recursive: true });
@@ -254,5 +255,11 @@ const result = Object.freeze({
 
 await mkdir(dirname(resultPath), { recursive: true });
 await writeFile(resultPath, JSON.stringify(result, null, 2) + "\n", "utf8");
-await rm(runtimeRoot, { recursive: true, force: true });
 console.log(JSON.stringify(result));
+}
+
+try {
+  await runQualification();
+} finally {
+  await rm(runtimeRoot, { recursive: true, force: true });
+}

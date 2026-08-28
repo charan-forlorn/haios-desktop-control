@@ -1,3 +1,4 @@
+import { win32 } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -6,11 +7,14 @@ import {
 } from "../src/operator/m11-active-canary-config.js";
 
 const CANARY_ROOT = "C:\\Workspace\\haios-operator-canary";
+const LOCAL_APP_DATA = process.env.LOCALAPPDATA ?? "C:\\Users\\fixture\\AppData\\Local";
+const M10_API_KEY = win32.join(LOCAL_APP_DATA, "HAIOS", "M10", "operator-api-key");
+const M11_WORKTREES = win32.join(LOCAL_APP_DATA, "HAIOS", "M11", "worktrees");
 
 function validConfig(): Record<string, unknown> {
   return {
-    apiKeyFile: "C:\\state\\operator-api-key.txt",
-    worktreeRoot: "C:\\runtime\\m11-worktrees",
+    apiKeyFile: M10_API_KEY,
+    worktreeRoot: M11_WORKTREES,
     allowedProjects: { "operator-canary": CANARY_ROOT },
     port: 8769,
     mode: "ACTIVE",
@@ -104,6 +108,19 @@ describe("M11 ACTIVE-canary config boundary", () => {
       { ...validConfig(), port: 8774 },
       { ...validConfig(), port: 8769.5 },
       { ...validConfig(), port: "8769" },
+    ]) {
+      expect(() => validateM11ActiveCanaryConfig(value)).toThrow("M11_ACTIVE_CANARY_CONFIG_DENIED");
+    }
+  });
+});
+
+describe("M11 production path pinning", () => {
+  it("rejects alternate API-key and transaction-worktree paths", () => {
+    for (const value of [
+      { ...validConfig(), apiKeyFile: "C:\\state\\operator-api-key.txt" },
+      { ...validConfig(), worktreeRoot: "C:\\runtime\\m11-worktrees" },
+      { ...validConfig(), apiKeyFile: win32.join(LOCAL_APP_DATA, "HAIOS", "M11", "operator-api-key") },
+      { ...validConfig(), worktreeRoot: win32.join(LOCAL_APP_DATA, "HAIOS", "M10", "worktrees") },
     ]) {
       expect(() => validateM11ActiveCanaryConfig(value)).toThrow("M11_ACTIVE_CANARY_CONFIG_DENIED");
     }
