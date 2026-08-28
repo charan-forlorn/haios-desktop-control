@@ -34,6 +34,15 @@ describe("M10 adversarial pre-live boundary", () => {
       "M10_SHARED_TUNNEL_DRIFT", "M10_SECURE_8768_DRIFT",
     ]) expect(source).toContain(marker);
   });
+  it("blocks pre-live qualification when either long-lived tunnel is not currently healthy", async () => {
+    const source = await readFile(qualifierPath, "utf8");
+    for (const marker of [
+      "haios-tunnel-client", "haios-operator-dedicated-tunnel-client",
+      "Get-ContainerHealthStatus", "M10_SHARED_TUNNEL_READINESS_FAILED",
+      "M10_DEDICATED_TUNNEL_READINESS_FAILED", "m10-operational-readiness-blocker.json",
+    ]) expect(source).toContain(marker);
+  });
+
   it("seals exact executor, rollback, preflight, live verifier, manifest and Human decision", async () => {
     const source = await readFile(qualifierPath, "utf8");
     for (const marker of [

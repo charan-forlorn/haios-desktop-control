@@ -42,6 +42,11 @@ function Get-LabeledContainerResidue([string]$Label) {
   $ids=@(& docker.exe ps -aq --filter "label=$Label" 2>$null); Require-Exit "M10_CONTAINER_RESIDUE_QUERY"
   @($ids | Where-Object { $_ -and $_.Trim() })
 }
+function Get-ContainerHealthStatus([string]$Name) {
+  $status=(& docker.exe inspect --format '{{.State.Health.Status}}' $Name 2>$null).Trim()
+  if($LASTEXITCODE -ne 0 -or -not $status){throw "M10_CONTAINER_HEALTH_UNAVAILABLE:$Name"}
+  $status
+}
 function Get-ContainerIntegrityDigest([string]$Name) {
   $raw=& docker.exe inspect $Name 2>$null
   if($LASTEXITCODE -ne 0 -or -not $raw){throw "M10_CONTAINER_UNAVAILABLE:$Name"}
@@ -102,6 +107,22 @@ $RollbackSha=Get-Sha256 $RollbackPath
 $PreflightSha=Get-Sha256 $PreflightPath
 $LiveQualifierSha=Get-Sha256 $LiveQualifierPath
 $StrictLauncherSha=Get-Sha256 $StrictLauncherPath
+$SharedTunnelHealth=Get-ContainerHealthStatus "haios-tunnel-client"
+$DedicatedTunnelHealth=Get-ContainerHealthStatus "haios-operator-dedicated-tunnel-client"
+if($SharedTunnelHealth -ne "healthy" -or $DedicatedTunnelHealth -ne "healthy"){
+  $Blocker=[ordered]@{
+    mission="HAIOS_DESKTOP_CONTROL_PLANE_R1_M10_STAGED_READ_ONLY_CUTOVER";run_id=$RunId;head=$Head;branch=$Branch
+    blocker=if($SharedTunnelHealth -ne "healthy"){"M10_SHARED_TUNNEL_READINESS_FAILED"}else{"M10_DEDICATED_TUNNEL_READINESS_FAILED"}
+    shared_tunnel_health=$SharedTunnelHealth;dedicated_tunnel_health=$DedicatedTunnelHealth
+    listener_8768=@($Listener8768Pre);listener_8769=@($Listener8769Pre);operator_mode="READ_ONLY_EMERGENCY"
+    production_mutation_performed=$false;task_created=$false;secret_created=$false;tunnel_reconfigured=$false
+    terminal="HAIOS_DESKTOP_CONTROL_PLANE_R1_M10_BLOCKED_PREEXISTING_TUNNEL_READINESS"
+  }
+  $BlockerPath=Join-Path $EvidenceRoot "m10-operational-readiness-blocker.json"
+  Write-JsonNoBom $BlockerPath $Blocker
+  if($SharedTunnelHealth -ne "healthy"){throw "M10_SHARED_TUNNEL_READINESS_FAILED"}
+  throw "M10_DEDICATED_TUNNEL_READINESS_FAILED"
+}
 Write-Host "M10_PRECONDITIONS=PASS"
 Write-Host "M10_PRODUCTION_MUTATION_PERFORMED=FALSE"
 
