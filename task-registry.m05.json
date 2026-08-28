@@ -1,0 +1,40 @@
+{
+  "registryId": "haios-desktop-control-m05-task-registry",
+  "version": "1.0.0",
+  "tasks": {
+    "node.test.run": {
+      "argvTemplate": ["node", "--test", "{{testPath}}"],
+      "paramSchemas": {
+        "testPath": { "kind": "relpath", "mustExist": true }
+      },
+      "requiredParams": ["testPath"],
+      "sandboxProfile": "S0",
+      "effectPolicyRef": "default-artifacts-v1",
+      "timeoutMs": 300000
+    },
+    "project.build": {
+      "argvTemplate": ["npm", "run", "build"],
+      "paramSchemas": {},
+      "requiredParams": [],
+      "sandboxProfile": "S0",
+      "effectPolicyRef": "default-artifacts-v1",
+      "timeoutMs": 600000
+    },
+    "project.test": {
+      "argvTemplate": ["npm", "test"],
+      "paramSchemas": {},
+      "requiredParams": [],
+      "sandboxProfile": "S0",
+      "effectPolicyRef": "default-artifacts-v1",
+      "timeoutMs": 600000
+    },
+    "project.typecheck": {
+      "argvTemplate": ["npm", "run", "typecheck"],
+      "paramSchemas": {},
+      "requiredParams": [],
+      "sandboxProfile": "S0",
+      "effectPolicyRef": "default-artifacts-v1",
+      "timeoutMs": 600000
+    }
+  }
+}
