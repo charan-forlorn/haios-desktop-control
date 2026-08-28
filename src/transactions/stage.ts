@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { realpath } from "node:fs/promises";
+import { lstat, realpath } from "node:fs/promises";
 import { win32 } from "node:path";
 
 import { authorizePath } from "../paths.js";
@@ -95,13 +95,25 @@ export async function stageIntent(
       return { decision: "DENY", reason: "PATH_OR_CONTENT_DENIED" };
     }
     normalized = Object.freeze({ ...intent, path });
-  } else {
+  } else if (intent.kind === "move") {
     const sourcePath = await authorizeProjectPath(intent.sourcePath);
     const destinationPath = await authorizeProjectPath(intent.destinationPath);
     if (sourcePath === null || destinationPath === null || sourcePath.toLowerCase() === destinationPath.toLowerCase()) {
       return { decision: "DENY", reason: "PATH_DENIED" };
     }
     normalized = Object.freeze({ ...intent, sourcePath, destinationPath });
+  } else {
+    const path = await authorizeProjectPath(intent.path);
+    if (path === null || !SHA256_HEX.test(intent.expectedSha256)) {
+      return { decision: "DENY", reason: "PATH_OR_HASH_DENIED" };
+    }
+    try {
+      const stat = await lstat(path);
+      if (!stat.isFile() || stat.isSymbolicLink()) return { decision: "DENY", reason: "REMOVE_TARGET_NOT_REGULAR_FILE" };
+    } catch {
+      return { decision: "DENY", reason: "REMOVE_TARGET_MISSING" };
+    }
+    normalized = Object.freeze({ ...intent, path });
   }
 
   if (hasConflict(record, normalized)) return { decision: "DENY", reason: "CONFLICTING_TRANSACTION_INTENT" };

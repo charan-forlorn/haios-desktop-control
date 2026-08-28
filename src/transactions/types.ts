@@ -28,7 +28,8 @@ export interface TransactionCurrentness {
 export type TransactionIntent =
   | { readonly kind: "create"; readonly path: string; readonly content: string }
   | { readonly kind: "replace"; readonly path: string; readonly expectedSha256: string; readonly content: string }
-  | { readonly kind: "move"; readonly sourcePath: string; readonly destinationPath: string };
+  | { readonly kind: "move"; readonly sourcePath: string; readonly destinationPath: string }
+  | { readonly kind: "remove"; readonly path: string; readonly expectedSha256: string };
 
 export interface TransactionRecord {
   readonly id: string;

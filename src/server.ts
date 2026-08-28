@@ -134,6 +134,7 @@ Object.assign(INPUT_SCHEMAS, {
   transaction_stage_create: objectSchema({ transactionId: STRING, path: STRING, content: STRING }, ["transactionId", "path", "content"]),
   transaction_stage_replace: objectSchema({ transactionId: STRING, path: STRING, expectedSha256: STRING, content: STRING }, ["transactionId", "path", "expectedSha256", "content"]),
   transaction_stage_move: objectSchema({ transactionId: STRING, sourcePath: STRING, destinationPath: STRING }, ["transactionId", "sourcePath", "destinationPath"]),
+  transaction_stage_remove: objectSchema({ transactionId: STRING, path: STRING, expectedSha256: STRING }, ["transactionId", "path", "expectedSha256"]),
   transaction_validate: objectSchema({ transactionId: STRING }, ["transactionId"]),
   transaction_apply: objectSchema({ transactionId: STRING }, ["transactionId"]),
   transaction_rollback: objectSchema({ transactionId: STRING }, ["transactionId"]),

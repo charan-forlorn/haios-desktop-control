@@ -26,6 +26,7 @@ async function planForIntent(
       postSha256: sha256Bytes(Buffer.from(intent.content, "utf8")), bundlePath: captured.bundlePath,
     };
   }
+  if (intent.kind === "remove") throw new Error("REMOVE_NOT_IMPLEMENTED");
   const bytes = await probe.read(intent.sourcePath);
   const captured = await bundles.capture(intent.sourcePath, bytes);
   return {
@@ -50,6 +51,7 @@ async function executeIntent(
     const result = await adapter.replace(intent.path, intent.expectedSha256, intent.content);
     return result.decision === "ALLOW" ? { decision: "ALLOW" } : result;
   }
+  if (intent.kind === "remove") return { decision: "DENY", reason: "REMOVE_NOT_IMPLEMENTED" };
   const result = await adapter.move(intent.sourcePath, intent.destinationPath);
   return result.decision === "ALLOW" ? { decision: "ALLOW" } : result;
 }

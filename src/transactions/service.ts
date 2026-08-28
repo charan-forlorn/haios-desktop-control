@@ -70,6 +70,10 @@ export class TransactionService {
     return this.#stage(transactionId, { kind: "move", sourcePath, destinationPath });
   }
 
+  stageRemove(transactionId: string, path: string, expectedSha256: string) {
+    return this.#stage(transactionId, { kind: "remove", path, expectedSha256 });
+  }
+
   async validate(transactionId: string): Promise<TransactionServiceResult> {
     const result = await validateTransaction(this.#store, transactionId, this.#currentness);
     if (result.decision !== "ALLOW") return result;
@@ -165,6 +169,7 @@ export interface TransactionServiceApi {
   stageCreate(transactionId: string, path: string, content: string): Promise<TransactionDispatchResult>;
   stageReplace(transactionId: string, path: string, expectedSha256: string, content: string): Promise<TransactionDispatchResult>;
   stageMove(transactionId: string, sourcePath: string, destinationPath: string): Promise<TransactionDispatchResult>;
+  stageRemove(transactionId: string, path: string, expectedSha256: string): Promise<TransactionDispatchResult>;
   validate(transactionId: string): Promise<TransactionDispatchResult>;
   apply(transactionId: string): Promise<TransactionDispatchResult>;
   rollback(transactionId: string): Promise<TransactionDispatchResult>;
@@ -186,7 +191,7 @@ function exactStrings(raw: unknown, keys: readonly string[]): Record<string, str
 const INVALID_ARGS: TransactionDispatchResult = Object.freeze({ decision: "DENY" as const, reason: "INVALID_MUTATION_ARGUMENTS" });
 const TRANSACTION_TOOL_NAMES = new Set([
   "transaction_begin", "transaction_stage_create", "transaction_stage_replace",
-  "transaction_stage_move", "transaction_validate", "transaction_apply",
+  "transaction_stage_move", "transaction_stage_remove", "transaction_validate", "transaction_apply",
   "transaction_rollback", "transaction_status",
 ]);
 
@@ -210,6 +215,10 @@ export async function dispatchTransactionTool(
   if (name === "transaction_stage_move") {
     const args = exactStrings(raw, ["transactionId", "sourcePath", "destinationPath"]);
     return args === null ? INVALID_ARGS : service.stageMove(args.transactionId!, args.sourcePath!, args.destinationPath!);
+  }
+  if (name === "transaction_stage_remove") {
+    const args = exactStrings(raw, ["transactionId", "path", "expectedSha256"]);
+    return args === null ? INVALID_ARGS : service.stageRemove(args.transactionId!, args.path!, args.expectedSha256!);
   }
   const args = exactStrings(raw, ["transactionId"]);
   if (args === null) return INVALID_ARGS;

@@ -15,13 +15,14 @@ const MUTATE_NAMES = [
   "transaction_stage_create",
   "transaction_stage_replace",
   "transaction_stage_move",
+  "transaction_stage_remove",
   "transaction_validate",
   "transaction_apply",
   "transaction_rollback",
   "transaction_status",
 ] as const;
 describe("M03 mutation capability registry", () => {
-  it("defines exactly eight immutable MUTATE wrappers", () => {
+  it("defines exactly nine immutable MUTATE wrappers", () => {
     expect(MUTATE_TOOL_DEFINITIONS.map(({ name }) => name)).toEqual(MUTATE_NAMES);
     expect(Object.isFrozen(MUTATE_TOOL_DEFINITIONS)).toBe(true);
     expect(MUTATE_TOOL_DEFINITIONS.every(Object.isFrozen)).toBe(true);

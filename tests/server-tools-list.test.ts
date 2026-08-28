@@ -28,6 +28,7 @@ const EXPECTED_TOOLS = [
   "transaction_stage_create",
   "transaction_stage_replace",
   "transaction_stage_move",
+  "transaction_stage_remove",
   "transaction_validate",
   "transaction_apply",
   "transaction_rollback",

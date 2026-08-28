@@ -43,6 +43,7 @@ export const MUTATE_TOOL_DEFINITIONS: readonly Readonly<GatewayToolDefinition>[]
     defineTool("transaction_stage_create", "MUTATE"),
     defineTool("transaction_stage_replace", "MUTATE"),
     defineTool("transaction_stage_move", "MUTATE"),
+    defineTool("transaction_stage_remove", "MUTATE"),
     defineTool("transaction_validate", "MUTATE"),
     defineTool("transaction_apply", "MUTATE"),
     defineTool("transaction_rollback", "MUTATE"),
