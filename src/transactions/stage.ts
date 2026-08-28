@@ -1,14 +1,11 @@
 import { randomBytes } from "node:crypto";
-import { lstat, realpath } from "node:fs/promises";
-import { win32 } from "node:path";
 
-import { authorizePath } from "../paths.js";
 import { nextTransactionState } from "./state.js";
 import { sameCurrentness, type CurrentnessProvider } from "./currentness.js";
+import { authorizeProjectPath, authorizeRemoveTarget } from "./guard.js";
 import type { TransactionIntent, TransactionRecord } from "./types.js";
 import type { TransactionStore } from "./store.js";
 
-const PROJECT_ROOT = "c:\\workspace\\haios-desktop-control";
 const MAX_CONTENT_BYTES = 1024 * 1024;
 const SHA256_HEX = /^[a-f0-9]{64}$/;
 
@@ -16,34 +13,6 @@ export type TransactionOperationResult =
   | { readonly decision: "ALLOW"; readonly state: TransactionRecord["state"]; readonly transaction: TransactionRecord }
   | { readonly decision: "DENY"; readonly reason: string };
 
-function projectScoped(normalizedPath: string): boolean {
-  const lower = normalizedPath.toLowerCase();
-  return lower === PROJECT_ROOT || lower.startsWith(`${PROJECT_ROOT}\\`);
-}
-
-async function nearestExistingProjectRealpath(normalizedPath: string): Promise<string | null> {
-  let candidate = normalizedPath;
-  const volumeRoot = win32.parse(normalizedPath).root;
-  while (true) {
-    try {
-      return win32.normalize(await realpath(candidate));
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code !== "ENOENT" && code !== "ENOTDIR") return null;
-    }
-    const parent = win32.dirname(candidate);
-    if (parent === candidate || candidate === volumeRoot) return null;
-    candidate = parent;
-  }
-}
-
-async function authorizeProjectPath(input: string): Promise<string | null> {
-  const decision = await authorizePath(input);
-  if (decision.decision !== "ALLOW" || !projectScoped(decision.normalizedPath)) return null;
-  const resolvedAncestor = await nearestExistingProjectRealpath(decision.normalizedPath);
-  if (resolvedAncestor === null || !projectScoped(resolvedAncestor)) return null;
-  return decision.normalizedPath;
-}
 export async function beginTransaction(
   store: TransactionStore,
   currentnessProvider: CurrentnessProvider,
@@ -103,17 +72,12 @@ export async function stageIntent(
     }
     normalized = Object.freeze({ ...intent, sourcePath, destinationPath });
   } else {
-    const path = await authorizeProjectPath(intent.path);
-    if (path === null || !SHA256_HEX.test(intent.expectedSha256)) {
+    if (!SHA256_HEX.test(intent.expectedSha256)) {
       return { decision: "DENY", reason: "PATH_OR_HASH_DENIED" };
     }
-    try {
-      const stat = await lstat(path);
-      if (!stat.isFile() || stat.isSymbolicLink()) return { decision: "DENY", reason: "REMOVE_TARGET_NOT_REGULAR_FILE" };
-    } catch {
-      return { decision: "DENY", reason: "REMOVE_TARGET_MISSING" };
-    }
-    normalized = Object.freeze({ ...intent, path });
+    const guarded = await authorizeRemoveTarget(intent.path);
+    if (guarded.decision !== "ALLOW") return guarded;
+    normalized = Object.freeze({ ...intent, path: guarded.normalizedPath });
   }
 
   if (hasConflict(record, normalized)) return { decision: "DENY", reason: "CONFLICTING_TRANSACTION_INTENT" };

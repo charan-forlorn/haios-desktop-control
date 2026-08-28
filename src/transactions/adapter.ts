@@ -1,5 +1,6 @@
 import { access, readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
+import { authorizeRemoveTarget } from "./guard.js";
 
 export interface MutationUpstream {
   writeFile(args: { path: string; content: string; mode: "rewrite" }): Promise<unknown>;
@@ -53,12 +54,19 @@ export class TransactionMutationAdapter {
     return { decision: "ALLOW", preimage: bytes.toString("utf8") };
   }
   async removeToQuarantine(source: string, destination: string, expectedSha256: string): Promise<MutationAdapterResult> {
-    if (!(await this.#probe.exists(source))) return { decision: "DENY", reason: "SOURCE_MISSING" };
+    const initialGuard = await authorizeRemoveTarget(source);
+    if (initialGuard.decision !== "ALLOW") return initialGuard;
+    source = initialGuard.normalizedPath;
     if (await this.#probe.exists(destination)) return { decision: "DENY", reason: "DESTINATION_EXISTS" };
     const bytes = await this.#probe.read(source);
     if (sha256Bytes(bytes) !== expectedSha256) return { decision: "DENY", reason: "PREIMAGE_MISMATCH" };
+    const finalGuard = await authorizeRemoveTarget(source);
+    if (finalGuard.decision !== "ALLOW") return finalGuard;
+    if (finalGuard.normalizedPath.toLowerCase() !== source.toLowerCase()) return { decision: "DENY", reason: "PATH_DENIED" };
+    const finalBytes = await this.#probe.read(source);
+    if (sha256Bytes(finalBytes) !== expectedSha256) return { decision: "DENY", reason: "PREIMAGE_MISMATCH" };
     await this.#upstream.moveFile({ source, destination });
-    return { decision: "ALLOW", preimage: bytes.toString("utf8") };
+    return { decision: "ALLOW", preimage: finalBytes.toString("utf8") };
   }
 
   async move(source: string, destination: string): Promise<MutationAdapterResult> {

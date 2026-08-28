@@ -20,6 +20,25 @@ function Require-Exit([string]$Name) {
     if ($LASTEXITCODE -ne 0) { throw "$Name failed with exit $LASTEXITCODE" }
 }
 
+function Get-DeterministicSourceManifestLines {
+    $RelativePaths = [string[]]@(git ls-files)
+    [Array]::Sort($RelativePaths, [StringComparer]::Ordinal)
+    $ManifestLines = @()
+    foreach ($Relative in $RelativePaths) {
+        $Absolute = Join-Path $Root $Relative
+        $Hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Absolute).Hash.ToLowerInvariant()
+        $ManifestLines += "$Hash  $Relative"
+    }
+    return @($ManifestLines)
+}
+
+function Write-DeterministicSourceManifest([string]$Path) {
+    $ManifestLines = @(Get-DeterministicSourceManifestLines)
+    $ManifestText = ($ManifestLines -join "`n") + "`n"
+    [IO.File]::WriteAllText($Path, $ManifestText, [Text.UTF8Encoding]::new($false))
+    return (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant()
+}
+
 $TunnelContainers = @(
     "haios-tunnel-client",
     "haios-operator-dedicated-tunnel-client"
@@ -79,14 +98,7 @@ Require-Exit "TYPECHECK"
 Require-Exit "BUILD"
 Write-Host "[3] Frozen source identity and live preconditions"
 $ManifestPath = Join-Path $EvidenceRoot "source-manifest.txt"
-$ManifestLines = @()
-foreach ($Relative in (git ls-files | Sort-Object)) {
-    $Absolute = Join-Path $Root $Relative
-    $Hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Absolute).Hash.ToLowerInvariant()
-    $ManifestLines += "$Hash  $Relative"
-}
-$ManifestLines | Set-Content -Encoding utf8 $ManifestPath
-$ManifestDigest = (Get-FileHash -Algorithm SHA256 $ManifestPath).Hash.ToLowerInvariant()
+$ManifestDigest = Write-DeterministicSourceManifest $ManifestPath
 Write-Host "SOURCE_MANIFEST_DIGEST=$ManifestDigest"
 
 if ((git status --porcelain).Length -ne 0) { throw "POST_TEST_WORKTREE_DRIFT" }
@@ -304,15 +316,8 @@ if ((git status --porcelain).Length -ne 0) { throw "POST_LIVE_WORKTREE_DRIFT" }
 if ((git rev-parse HEAD).Trim() -ne $Head) { throw "POST_LIVE_HEAD_DRIFT" }
 if ((& git -C $ProjectRoot rev-parse HEAD).Trim() -ne $CanonicalHead) { throw "CANONICAL_PROJECT_HEAD_DRIFT" }
 if ((& git -C $ProjectRoot status --porcelain).Length -ne 0) { throw "CANONICAL_PROJECT_WORKTREE_DRIFT" }
-$ManifestLinesAfter = @()
-foreach ($Relative in (git ls-files | Sort-Object)) {
-    $Absolute = Join-Path $Root $Relative
-    $Hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Absolute).Hash.ToLowerInvariant()
-    $ManifestLinesAfter += "$Hash  $Relative"
-}
 $AfterPath = Join-Path $EvidenceRoot "source-manifest-post-live.txt"
-$ManifestLinesAfter | Set-Content -Encoding utf8 $AfterPath
-$ManifestDigestAfter = (Get-FileHash -Algorithm SHA256 $AfterPath).Hash.ToLowerInvariant()
+$ManifestDigestAfter = Write-DeterministicSourceManifest $AfterPath
 if ($ManifestDigestAfter -ne $ManifestDigest) { throw "SOURCE_MANIFEST_DRIFT" }
 
 $SecretLeakDetected = $false

@@ -1,4 +1,4 @@
-﻿import { createHash } from "node:crypto";
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, readdir, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -77,6 +77,36 @@ describe("M04 adversarial safe-remove boundary", () => {
     expect(await readFile(outsideFile, "utf8")).toBe("outside");
   });
 
+  it("re-authorizes the project realpath after validation before remove mutation", async () => {
+    const outside = await mkdtemp("C:\\Workspace\\m04-toctou-outside-");
+    dirs.push(outside);
+    const { root, service } = await fixture();
+    const parent = join(root, "swap-parent");
+    await mkdir(parent, { recursive: true });
+    const target = join(parent, "victim.txt");
+    const id = await stageRemoveAndValidate(service, target, "same-bytes");
+
+    await rm(parent, { recursive: true, force: true });
+    const outsideTarget = join(outside, "victim.txt");
+    await writeFile(outsideTarget, "same-bytes", "utf8");
+    await symlink(outside, parent, "junction");
+
+    await expect(service.apply(id)).resolves.toMatchObject({ decision: "DENY" });
+    expect(await readFile(outsideTarget, "utf8")).toBe("same-bytes");
+    expect(await service.status(id)).toMatchObject({ decision: "ALLOW", state: "ROLLED_BACK" });
+  });
+
+  it("rejects a non-regular remove source again at the mutation adapter boundary", async () => {
+    const { root } = await fixture();
+    const directoryTarget = join(root, "became-directory");
+    await mkdir(directoryTarget, { recursive: true });
+    const adapter = new TransactionMutationAdapter(upstream());
+    await expect(adapter.removeToQuarantine(
+      directoryTarget,
+      join(root, "txn_" + "a".repeat(32), "quarantine", "target.bin"),
+      "a".repeat(64),
+    )).resolves.toEqual({ decision: "DENY", reason: "REMOVE_TARGET_NOT_REGULAR_FILE" });
+  });
   it.each(["delete", "unlink", "rm", "move_file"])("keeps raw destructive primitive %s unavailable", async (name) => {
     const { service } = await fixture();
     expect(classifyGatewayTool(name)).toBe("UNKNOWN");
@@ -155,6 +185,10 @@ describe("M04 qualification script contract", () => {
     expect(script).toContain('const verifier = mode === "failure" ? async () => false');
     expect(script).toContain("Get-TunnelIntegrityDigest");
     expect(script).toContain("SOURCE_MANIFEST_DIGEST");
+    expect(script).toContain("[StringComparer]::Ordinal");
+    expect(script).toContain("[Text.UTF8Encoding]::new($false)");
+    expect(script).toContain('($ManifestLines -join "`n") + "`n"');
+    expect(script).not.toContain("git ls-files | Sort-Object");
     expect(script).toContain("RUNTIME_RESIDUE=0");
     expect(script).toContain("UNAUTHORIZED_MUTATIONS=0");
     expect(script).toContain("SECRETS_PERSISTED=FALSE");

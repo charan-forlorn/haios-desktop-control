@@ -1,5 +1,6 @@
 import { NODE_FILE_PROBE, sha256Bytes, type FileProbe, type TransactionMutationAdapter } from "./adapter.js";
 import { sameCurrentness, type CurrentnessProvider } from "./currentness.js";
+import { authorizeRemoveTarget } from "./guard.js";
 import type { RollbackBundleStore } from "./preimage.js";
 import { rollbackPlans } from "./rollback.js";
 import { nextTransactionState } from "./state.js";
@@ -27,14 +28,16 @@ async function planForIntent(
     };
   }
   if (intent.kind === "remove") {
-    const bytes = await probe.read(intent.path);
+    const guarded = await authorizeRemoveTarget(intent.path);
+    if (guarded.decision !== "ALLOW") throw new Error(guarded.reason);
+    const bytes = await probe.read(guarded.normalizedPath);
     const preSha256 = sha256Bytes(bytes);
     if (preSha256 !== intent.expectedSha256) throw new Error("PREIMAGE_MISMATCH");
-    const captured = await bundles.capture(intent.path, bytes);
-    const quarantinePath = await bundles.prepareQuarantine(intent.path);
+    const captured = await bundles.capture(guarded.normalizedPath, bytes);
+    const quarantinePath = await bundles.prepareQuarantine(guarded.normalizedPath);
     return {
       kind: "remove",
-      path: intent.path,
+      path: guarded.normalizedPath,
       preSha256,
       quarantinePath,
       bundlePath: captured.bundlePath,
