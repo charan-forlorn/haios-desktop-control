@@ -70,3 +70,12 @@ describe("M10 production preflight contract", () => {
     ]) expect(source).toContain(marker);
   });
 });
+
+// M10 production supervision must never bypass the strict M10 wrapper.
+describe("M10 supervisor launcher binding", () => {
+  it("points Task Scheduler only at the M10 read-only launcher", async () => {
+    const source = await readFile(scriptPath, "utf8");
+    expect(source).toContain("run-m10-readonly-runtime.mjs");
+    expect(source).not.toContain("run-m09-host-runtime.mjs");
+  });
+});

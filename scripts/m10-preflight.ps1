@@ -83,7 +83,7 @@ function Test-AclFixture {
 function Test-TaskSchedulerFeasibility {
   $identity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
   $node = "C:\Program Files\nodejs\node.exe"
-  $launcher = "C:\Workspace\haios-desktop-control-runtime\scripts\run-m09-host-runtime.mjs"
+  $launcher = "C:\Workspace\haios-desktop-control-runtime\scripts\run-m10-readonly-runtime.mjs"
   $config = Join-Path $env:LOCALAPPDATA "HAIOS\M10\host-config.json"
   $action = New-ScheduledTaskAction -Execute $node -Argument "`"$launcher`" `"$config`""
   $trigger = New-ScheduledTaskTrigger -AtLogOn -User $identity
