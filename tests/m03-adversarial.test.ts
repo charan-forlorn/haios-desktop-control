@@ -145,6 +145,7 @@ describe("M03 qualification script contract", () => {
     expect(script).toContain("LIVE_TOOL_COUNT=26");
     expect(script).toContain("LIVE_CREATE_REPLACE_MOVE=PASS");
     expect(script).toContain("LIVE_VERIFICATION_FAILURE_ROLLBACK=PASS");
+    expect(script).toContain('const verifier = mode === "failure" ? async () => false');
     expect(script).toContain("Get-TunnelIntegrityDigest");
     expect(script).toContain("SOURCE_MANIFEST_DIGEST");
     expect(script).toContain("UNAUTHORIZED_MUTATIONS=0");

@@ -109,7 +109,7 @@ const key = process.env.HAIOS_M03_API_KEY;
 const mode = process.env.HAIOS_M03_VERIFY_MODE ?? "pass";
 if (!key) throw new Error("HAIOS_M03_API_KEY missing");
 const upstream = await DesktopCommanderClient.connect();
-const verifier = mode === "fail" ? async () => false : async () => {
+const verifier = mode === "failure" ? async () => false : async () => {
   const result = await dispatchExecuteTool("project_test", {}, { upstream });
   return result.decision === "ALLOW" && result.preStateDigest === result.postStateDigest;
 };
