@@ -38,6 +38,7 @@ class FakeGit implements OperatorTransactionGit {
   }
   async worktreeRemove(repo: string, path: string) { this.calls.push({ op: "worktreeRemove", args: [repo, path] }); await rm(path, { recursive: true, force: true }); }
   async deleteBranch(repo: string, branch: string) { this.calls.push({ op: "deleteBranch", args: [repo, branch] }); }
+  async mergeFastForward(cwd: string, checkpoint: string) { this.calls.push({ op: "mergeFastForward", args: [cwd, checkpoint] }); return checkpoint; }
 }
 async function fixture() {
   const canonical = await mkdtemp("C:\\Workspace\\m06-checkpoint-canonical-");

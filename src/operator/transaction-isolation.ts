@@ -17,6 +17,7 @@ export interface OperatorTransactionGit {
   addAll(cwd: string): Promise<void>;
   commit(cwd: string, message: string): Promise<string>;
   isAncestor(cwd: string, ancestor: string, descendant: string): Promise<boolean>;
+  mergeFastForward(cwd: string, checkpoint: string): Promise<string>;
 }
 
 export interface OperatorTransactionServiceConfig {
@@ -296,12 +297,17 @@ export class OperatorTransactionService {
       (await this.#git.status(record.canonicalRoot)).trim().length === 0;
   }
 
-  async #discard(record: MutableRecord): Promise<boolean> {
+  async #discardRuntime(record: MutableRecord): Promise<boolean> {
     let clean = true;
     try { await this.#git.worktreeRemove(record.canonicalRoot, record.worktreePath); }
     catch { clean = false; }
     try { await this.#git.deleteBranch(record.canonicalRoot, record.branchName); }
     catch { clean = false; }
+    return clean;
+  }
+
+  async #discard(record: MutableRecord): Promise<boolean> {
+    const clean = await this.#discardRuntime(record);
     record.state = "ROLLED_BACK";
     return clean;
   }
@@ -381,6 +387,49 @@ export class OperatorTransactionService {
     record.checkpointId = checkpointId;
     record.state = "CHECKPOINTED";
     return allow(record);
+  }
+
+  async promote(txId: string, expectedHeadSha: string, checkpointId: string): Promise<OperatorTransactionResult & { readonly cleanupPending?: boolean }> {
+    const record = this.#record(txId);
+    if (record === undefined) return { decision: "DENY", reason: "TRANSACTION_NOT_FOUND" };
+    if (record.state !== "CHECKPOINTED" || record.checkpointId === undefined) {
+      return { decision: "DENY", reason: "INVALID_TRANSACTION_STATE" };
+    }
+    if (expectedHeadSha !== record.baseHeadSha) return { decision: "DENY", reason: "EXPECTED_HEAD_MISMATCH" };
+    if (checkpointId !== record.checkpointId) return { decision: "DENY", reason: "CHECKPOINT_MISMATCH" };
+    if ((await this.#git.head(record.canonicalRoot)) !== record.baseHeadSha) {
+      return { decision: "DENY", reason: "STALE_CANONICAL_HEAD" };
+    }
+    if ((await this.#git.status(record.canonicalRoot)).trim().length !== 0) {
+      return { decision: "DENY", reason: "CANONICAL_DIRTY" };
+    }
+    if (!(await this.#git.isAncestor(record.worktreePath, record.baseHeadSha, checkpointId))) {
+      return { decision: "DENY", reason: "CHECKPOINT_NOT_DESCENDANT" };
+    }
+    try {
+      const promotedHead = await this.#git.mergeFastForward(record.canonicalRoot, checkpointId);
+      if (promotedHead !== checkpointId || (await this.#git.head(record.canonicalRoot)) !== checkpointId) {
+        return { decision: "DENY", reason: "PROMOTION_POSTCONDITION_FAILED" };
+      }
+      if ((await this.#git.status(record.canonicalRoot)).trim().length !== 0) {
+        return { decision: "DENY", reason: "PROMOTION_POSTCONDITION_FAILED" };
+      }
+    } catch {
+      return { decision: "DENY", reason: "PROMOTION_FAILED" };
+    }
+    record.state = "PROMOTED";
+    const cleanupPending = !(await this.#discardRuntime(record));
+    return { decision: "ALLOW", transaction: snapshot(record), state: record.state, cleanupPending };
+  }
+
+  async rollback(txId: string): Promise<OperatorTransactionResult> {
+    const record = this.#record(txId);
+    if (record === undefined) return { decision: "DENY", reason: "TRANSACTION_NOT_FOUND" };
+    if (record.state === "PROMOTED" || record.state === "ROLLED_BACK") {
+      return { decision: "DENY", reason: "INVALID_TRANSACTION_STATE" };
+    }
+    const cleaned = await this.#discard(record);
+    return cleaned ? allow(record) : { decision: "DENY", reason: "ROLLBACK_CLEANUP_PENDING" };
   }
 
   async status(txId: string): Promise<OperatorTransactionStatusResult> {

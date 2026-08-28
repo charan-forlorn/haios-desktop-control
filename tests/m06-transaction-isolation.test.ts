@@ -32,6 +32,7 @@ class FakeGit implements OperatorTransactionGit {
   async addAll(_cwd: string) {}
   async commit(_cwd: string, _message: string) { return "b".repeat(40); }
   async isAncestor(_cwd: string, _ancestor: string, _descendant: string) { return true; }
+  async mergeFastForward(_cwd: string, checkpoint: string) { return checkpoint; }
 }
 
 async function fixture() {
