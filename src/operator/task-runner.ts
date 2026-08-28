@@ -114,6 +114,7 @@ interface MetadataContext {
   readonly transaction?: TransactionSnapshot;
   readonly execution?: ResolvedTaskExecution;
   readonly sandbox?: SandboxExecutionResult;
+  readonly sandboxAttempted?: boolean;
   readonly effects?: readonly TaskEffectDelta[];
   readonly effectsComplete?: boolean;
   readonly pre?: CanonicalCurrentness;
@@ -205,7 +206,7 @@ export class OperatorTaskRunner {
   ): OperatorTaskResultMetadata {
     const effects = context.effects ?? [];
     const cleanupStatus = context.sandbox === undefined
-      ? "NOT_STARTED"
+      ? context.sandboxAttempted ? "UNVERIFIED" : "NOT_STARTED"
       : context.sandbox.cleanupVerified ? "VERIFIED" : "UNVERIFIED";
     return Object.freeze({
       decision,
@@ -302,6 +303,7 @@ export class OperatorTaskRunner {
     try { before = await captureTaskEffectManifest(transaction.worktreePath); }
     catch { return this.#deny("TASK_EFFECT_MANIFEST_FAILED", executionContext); }
 
+    const dispatchContext: MetadataContext = { ...executionContext, sandboxAttempted: true };
     let sandbox: SandboxExecutionResult;
     try {
       sandbox = await this.#config.sandbox.execute({
@@ -314,9 +316,9 @@ export class OperatorTaskRunner {
           : {}),
       });
     } catch {
-      return this.#deny("TASK_SANDBOX_EXECUTION_UNAVAILABLE", executionContext);
+      return this.#deny("TASK_SANDBOX_EXECUTION_UNAVAILABLE", dispatchContext);
     }
-    const sandboxContext: MetadataContext = { ...executionContext, sandbox };
+    const sandboxContext: MetadataContext = { ...dispatchContext, sandbox };
 
     let after;
     try { after = await captureTaskEffectManifest(transaction.worktreePath); }

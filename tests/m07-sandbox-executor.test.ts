@@ -29,10 +29,11 @@ function execution(profile: "S0" | "S1" = "S0"): ResolvedTaskExecution {
 }
 function fakeDocker(runResult: Partial<DockerExecResult> = {}) {
   const calls: string[][] = [];
+  const containerId = "c".repeat(64);
   const executor: DockerExecutor = async (args) => {
     calls.push([...args]);
     if (args[0] === "inspect" || (args[0] === "network" && args[1] === "inspect")) {
-      return { stdout: "m07|txn_test", stderr: "", exitCode: 0, timedOut: false };
+      return { stdout: `m07|txn_test|abc123|${containerId}`, stderr: "", exitCode: 0, timedOut: false };
     }
     return {
       stdout: "ok-output-abcdefghijklmnopqrstuvwxyz",
@@ -140,12 +141,13 @@ describe("M07 pinned Docker sandbox executor", () => {
 
   it("cleans an owned S1 fixture after failed or timed-out detached startup", async () => {
     const calls: string[][] = [];
-    const docker: DockerExecutor = async (args) => { calls.push([...args]); if (args[0] === "run" && args.includes("-d")) return { stdout: "fixture-id", stderr: "timeout", exitCode: 1, timedOut: true }; if (args[0] === "inspect") return { stdout: "m07|txn_test", stderr: "", exitCode: 0, timedOut: false }; if (args[0] === "rm") return { stdout: "", stderr: "", exitCode: 0, timedOut: false }; return { stdout: "", stderr: "", exitCode: 0, timedOut: false }; };
+    const fixtureContainerId = "d".repeat(64);
+    const docker: DockerExecutor = async (args) => { calls.push([...args]); if (args[0] === "run" && args.includes("-d")) return { stdout: fixtureContainerId, stderr: "timeout", exitCode: 1, timedOut: true }; if (args[0] === "inspect") return { stdout: `m07|txn_test|abc123|${fixtureContainerId}`, stderr: "", exitCode: 0, timedOut: false }; if (args[0] === "rm") return { stdout: "", stderr: "", exitCode: 0, timedOut: false }; return { stdout: "", stderr: "", exitCode: 0, timedOut: false }; };
     const sandbox = new SandboxExecutor({ docker, idFactory: () => "abc123" });
     const result = await sandbox.execute({ transactionId: "txn_test", execution: execution("S1"), worktreePath: "C:\\Workspace\\tx-worktree", safeEnvironment: { CI: "1" }, fixtureProfileId: "m07-http-fixture-v1" });
-    expect(result).toMatchObject({ decision: "DENY", reason: "SANDBOX_FIXTURE_START_FAILED", cleanupVerified: true });
+    expect(result).toMatchObject({ decision: "DENY", reason: "SANDBOX_FIXTURE_START_FAILED", cleanupVerified: true, timedOut: true });
     expect(calls.some((args) => args[0] === "inspect" && args.includes("haios-m07-fixture-abc123"))).toBe(true);
-    expect(calls.some((args) => args[0] === "rm" && args.includes("haios-m07-fixture-abc123"))).toBe(true);
+    expect(calls.some((args) => args[0] === "rm" && args.includes(fixtureContainerId))).toBe(true);
     expect(calls.filter((args) => args[0] === "run")).toHaveLength(1);
   });
 
@@ -161,6 +163,39 @@ describe("M07 pinned Docker sandbox executor", () => {
       worktreePath: "C:\\Workspace\\tx-worktree", safeEnvironment: { CI: "1" }, fixtureProfileId: "m07-http-fixture-v1" });
     expect(result).toMatchObject({ decision: "DENY", reason: "SANDBOX_CLEANUP_UNVERIFIED", cleanupVerified: false });
     expect(calls.some((args) => args[0] === "inspect")).toBe(true);
+    expect(calls.some((args) => args[0] === "rm")).toBe(false);
+  });
+
+  it("binds cleanup to exact run identity and removes by inspected container id", async () => {
+    const calls: string[][] = [];
+    const containerId = "a".repeat(64);
+    const docker: DockerExecutor = async (args) => {
+      calls.push([...args]);
+      if (args[0] === "inspect") return { stdout: `m07|txn_test|abc123|${containerId}`, stderr: "", exitCode: 0, timedOut: false };
+      return { stdout: "ok", stderr: "", exitCode: 0, timedOut: false };
+    };
+    const sandbox = new SandboxExecutor({ docker, idFactory: () => "abc123" });
+    const result = await sandbox.execute({ transactionId: "txn_test", execution: execution("S0"),
+      worktreePath: "C:\\Workspace\\tx-worktree", safeEnvironment: { CI: "1" } });
+    expect(result.decision).toBe("ALLOW");
+    const inspect = calls.find((args) => args[0] === "inspect")!;
+    expect(inspect.join(" ")).toContain("haios.m07.run");
+    const remove = calls.find((args) => args[0] === "rm")!;
+    expect(remove).toContain(containerId);
+    expect(remove).not.toContain("haios-m07-task-abc123");
+  });
+
+  it("never removes a same-transaction container from a different run", async () => {
+    const calls: string[][] = [];
+    const docker: DockerExecutor = async (args) => {
+      calls.push([...args]);
+      if (args[0] === "inspect") return { stdout: `m07|txn_test|other999|${"b".repeat(64)}`, stderr: "", exitCode: 0, timedOut: false };
+      return { stdout: "", stderr: "", exitCode: 0, timedOut: false };
+    };
+    const sandbox = new SandboxExecutor({ docker, idFactory: () => "abc123" });
+    const result = await sandbox.execute({ transactionId: "txn_test", execution: execution("S0"),
+      worktreePath: "C:\\Workspace\\tx-worktree", safeEnvironment: { CI: "1" } });
+    expect(result).toMatchObject({ decision: "DENY", reason: "SANDBOX_CLEANUP_UNVERIFIED", cleanupVerified: false });
     expect(calls.some((args) => args[0] === "rm")).toBe(false);
   });
 

@@ -86,7 +86,7 @@ describe("M07 internal bounded task runner", () => {
     const fx = await setup();
     const request: Record<string, unknown> = { txId: "txn_test", taskId: "node.test.run", params: { testPath: "tests/sample.test.mjs" }, expectedRegistrySha256: fx.registry.sha256, [field]: field === "env" ? { CI: "1" } : "forbidden" };
     const result = await fx.runner.run(request as never);
-    expect(result).toMatchObject({ decision: "DENY", reason: "TASK_REQUEST_FIELDS_DENIED" });
+    expect(result).toMatchObject({ decision: "DENY", reason: "TASK_REQUEST_FIELDS_DENIED", metadata: { cleanupStatus: "NOT_STARTED" } });
     expect(fx.getSandboxCalls()).toBe(0);
   });
   it("returns the approved audit/currentness metadata contract", async () => {
@@ -96,6 +96,16 @@ describe("M07 internal bounded task runner", () => {
     expect(result.metadata.canonicalPreStateDigest).toMatch(/^[a-f0-9]{64}$/);
     expect(result.metadata.canonicalPostStateDigest).toBe(result.metadata.canonicalPreStateDigest);
     expect(result.metadata.durationMs).toBe(3); expect(result.metadata.effectSummary.total).toBe(0);
+  });
+
+  it("reports thrown sandbox dispatch as attempted with unverified cleanup", async () => {
+    const fx = await setup();
+    fx.sandbox.execute = async () => { throw new Error("synthetic dispatch failure"); };
+    const result = await fx.runner.run({ txId: "txn_test", taskId: "node.test.run",
+      params: { testPath: "tests/sample.test.mjs" }, expectedRegistrySha256: fx.registry.sha256 });
+    expect(result).toMatchObject({ decision: "DENY", reason: "TASK_SANDBOX_EXECUTION_UNAVAILABLE", metadata: {
+      decision: "DENY", reason: "TASK_SANDBOX_EXECUTION_UNAVAILABLE", cleanupVerified: false, cleanupStatus: "UNVERIFIED", timedOut: null,
+    }});
   });
 
   it("denies registry currentness drift before sandbox execution", async () => {

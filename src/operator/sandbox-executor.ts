@@ -87,19 +87,25 @@ export class SandboxExecutor {
     this.#idFactory = config.idFactory ?? (() => randomUUID().replace(/-/g, "").slice(0, 12));
   }
 
-  async #ownedContainer(name: string, transactionId: string): Promise<boolean> {
+  async #ownedContainerId(name: string, transactionId: string, runId: string): Promise<string | null> {
     const result = await this.#docker([
       "inspect", "--format",
-      "{{ index .Config.Labels \"haios.m07.owner\" }}|{{ index .Config.Labels \"haios.m07.tx\" }}",
+      "{{ index .Config.Labels \"haios.m07.owner\" }}|{{ index .Config.Labels \"haios.m07.tx\" }}|{{ index .Config.Labels \"haios.m07.run\" }}|{{ .Id }}",
       name,
     ], 10_000);
-    return result.exitCode === 0 && result.stdout.trim() === `${OWNER}|${transactionId}`;
+    if (result.exitCode !== 0 || result.timedOut) return null;
+    const parts = result.stdout.trim().split("|");
+    if (parts.length !== 4) return null;
+    const [owner, tx, run, containerId] = parts;
+    if (owner !== OWNER || tx !== transactionId || run !== runId) return null;
+    return /^[a-f0-9]{64}$/.test(containerId ?? "") ? containerId! : null;
   }
 
-  async #removeOwnedContainer(name: string, transactionId: string): Promise<boolean> {
-    if (!(await this.#ownedContainer(name, transactionId))) return false;
-    const removed = await this.#docker(["rm", "--force", name], 15_000);
-    return removed.exitCode === 0;
+  async #removeOwnedContainer(name: string, transactionId: string, runId: string): Promise<boolean> {
+    const containerId = await this.#ownedContainerId(name, transactionId, runId);
+    if (containerId === null) return false;
+    const removed = await this.#docker(["rm", "--force", containerId], 15_000);
+    return removed.exitCode === 0 && !removed.timedOut;
   }
 
   #securityArgs(transactionId: string, runId: string, worktreePath: string): string[] {
@@ -133,7 +139,7 @@ export class SandboxExecutor {
     }
     return result;
   }
-  async #startFixture(transactionId: string, runId: string, name: string): Promise<boolean> {
+  async #startFixture(transactionId: string, runId: string, name: string): Promise<DockerExecResult> {
     const fixtureCode = [
       "const http=require('http');",
       "http.createServer((q,r)=>{r.end('M07_FIXTURE_OK')}).listen(8080,'127.0.0.1');",
@@ -154,15 +160,14 @@ export class SandboxExecutor {
       M07_NODE_TOOLCHAIN.image,
       "-e", fixtureCode,
     ];
-    const result = await this.#docker(args, 30_000);
-    return result.exitCode === 0 && !result.timedOut;
+    return this.#docker(args, 30_000);
   }
 
   async execute(request: SandboxExecutionRequest): Promise<SandboxExecutionResult> {
     const startedAt = Date.now();
-    const denied = (reason: string, cleanupVerified = false, exitCode?: number): SandboxExecutionResult => ({
+    const denied = (reason: string, cleanupVerified = false, exitCode?: number, timedOut = false): SandboxExecutionResult => ({
       decision: "DENY", reason, ...(exitCode === undefined ? {} : { exitCode }),
-      stdout: "", stderr: "", stdoutBytes: 0, stderrBytes: 0, timedOut: false,
+      stdout: "", stderr: "", stdoutBytes: 0, stderrBytes: 0, timedOut,
       stdoutTruncated: false, stderrTruncated: false,
       cleanupVerified, durationMs: Date.now() - startedAt,
     });
@@ -184,12 +189,15 @@ export class SandboxExecutor {
     let fixtureCreated = false;
 
     if (request.execution.sandboxProfile === "S1") {
-      fixtureCreated = await this.#startFixture(request.transactionId, runId, fixtureName);
+      const fixtureStart = await this.#startFixture(request.transactionId, runId, fixtureName);
+      fixtureCreated = fixtureStart.exitCode === 0 && !fixtureStart.timedOut;
       if (!fixtureCreated) {
-        const fixtureClean = await this.#removeOwnedContainer(fixtureName, request.transactionId);
+        const fixtureClean = await this.#removeOwnedContainer(fixtureName, request.transactionId, runId);
         return denied(
           fixtureClean ? "SANDBOX_FIXTURE_START_FAILED" : "SANDBOX_CLEANUP_UNVERIFIED",
           fixtureClean,
+          fixtureStart.exitCode,
+          fixtureStart.timedOut,
         );
       }
     }
@@ -210,9 +218,9 @@ export class SandboxExecutor {
     const stdout = secretOutput ? { text: "", truncated: false } : boundText(task.stdout, request.execution.stdoutMaxBytes);
     const stderr = secretOutput ? { text: "", truncated: false } : boundText(task.stderr, request.execution.stderrMaxBytes);
 
-    const taskClean = await this.#removeOwnedContainer(taskName, request.transactionId);
+    const taskClean = await this.#removeOwnedContainer(taskName, request.transactionId, runId);
     let fixtureClean = true;
-    if (fixtureCreated) fixtureClean = await this.#removeOwnedContainer(fixtureName, request.transactionId);
+    if (fixtureCreated) fixtureClean = await this.#removeOwnedContainer(fixtureName, request.transactionId, runId);
     const cleanupVerified = taskClean && fixtureClean;
     const base = {
       stdout: stdout.text,
