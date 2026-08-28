@@ -94,3 +94,20 @@ describe("M11 disposable fixture filesystem containment", () => {
     expect(helper).toMatch(/finally\s*\{[\s\S]*await rm\(runtimeRoot, \{ recursive: true, force: true \}\)/u);
   });
 });
+
+describe("M11 disposable helper destructive-path guard", () => {
+  it("validates repo-owned fixture/evidence paths before recursive deletion or result write", async () => {
+    const helper = await readFile(join(process.cwd(), "scripts", "live-m11-disposable-active.mjs"), "utf8");
+    for (const marker of [
+      "fileURLToPath(import.meta.url)", "runtime", "m11-fixture", "evidence", "m11",
+      "realpath", "M11_DISPOSABLE_RUNTIME_ROOT_DENIED", "M11_DISPOSABLE_RESULT_PATH_DENIED",
+      "await validateDisposablePaths",
+    ]) expect(helper).toContain(marker);
+    const guard = helper.indexOf("await validateDisposablePaths");
+    const firstDelete = helper.indexOf("await rm(runtimeRoot");
+    const resultWrite = helper.indexOf("await writeFile(resultPath");
+    expect(guard).toBeGreaterThan(0);
+    expect(firstDelete).toBeGreaterThan(guard);
+    expect(resultWrite).toBeGreaterThan(guard);
+  });
+});

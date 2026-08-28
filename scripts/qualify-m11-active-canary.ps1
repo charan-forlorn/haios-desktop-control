@@ -8,7 +8,10 @@ if($PSVersionTable.PSVersion.Major -lt 7){throw "POWERSHELL_7_REQUIRED"}
 if($DirectPort -lt 1024 -or $DirectPort -gt 65535 -or $DirectPort -in @(8768,8769)){throw "M11_DISPOSABLE_PORT_DENIED"}
 
 $Root=(Resolve-Path (Split-Path -Parent $PSScriptRoot)).Path
+$EvidenceBase=[IO.Path]::GetFullPath((Join-Path $Root "evidence\m11"))
 $EvidenceRoot=[IO.Path]::GetFullPath($EvidenceRoot)
+$EvidencePrefix=$EvidenceBase.TrimEnd('\')+'\'
+if(-not $EvidenceRoot.StartsWith($EvidencePrefix,[StringComparison]::OrdinalIgnoreCase)){throw "M11_DISPOSABLE_EVIDENCE_ROOT_DENIED"}
 $FixtureRoot=Join-Path $Root "runtime\m11-fixture\qualification"
 $Helper=Join-Path $Root "scripts\live-m11-disposable-active.mjs"
 $ResultPath=Join-Path $EvidenceRoot "m11-disposable-active-result.json"

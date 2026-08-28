@@ -1,7 +1,8 @@
 import { createHash, randomBytes } from "node:crypto";
 import { execFile } from "node:child_process";
-import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { mkdir, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -12,11 +13,36 @@ import { LocalOperatorGit } from "../dist/src/operator/local-git.js";
 import { OPERATOR_V1_TOOL_NAMES } from "../dist/src/operator/protocol.js";
 
 const run = promisify(execFile);
-const runtimeRoot = resolve(process.argv[2] ?? "");
+const requestedRuntimeRoot = resolve(process.argv[2] ?? "");
 const resultPath = resolve(process.argv[3] ?? "");
 const directPort = Number(process.argv[4]);
 if (!process.argv[2] || !process.argv[3] || !Number.isInteger(directPort)) throw new Error("M11_DISPOSABLE_ARGS_REQUIRED");
 if (directPort < 1024 || directPort > 65535 || directPort === 8768 || directPort === 8769) throw new Error("M11_DISPOSABLE_PORT_DENIED");
+
+const scriptRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const fixtureBase = resolve(scriptRoot, "runtime", "m11-fixture");
+const evidenceBase = resolve(scriptRoot, "evidence", "m11");
+const samePath = (left, right) => resolve(left).toLowerCase() === resolve(right).toLowerCase();
+const containedBy = (base, candidate) => {
+  const rel = relative(base, candidate);
+  return rel !== "" && rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
+};
+async function validateDisposablePaths() {
+  await mkdir(fixtureBase, { recursive: true });
+  await mkdir(evidenceBase, { recursive: true });
+  const [fixtureReal, evidenceReal] = await Promise.all([realpath(fixtureBase), realpath(evidenceBase)]);
+  if (!samePath(fixtureReal, fixtureBase)) throw new Error("M11_DISPOSABLE_RUNTIME_ROOT_DENIED");
+  if (!samePath(evidenceReal, evidenceBase)) throw new Error("M11_DISPOSABLE_RESULT_PATH_DENIED");
+  if (!samePath(dirname(requestedRuntimeRoot), fixtureBase) || basename(requestedRuntimeRoot).length === 0) {
+    throw new Error("M11_DISPOSABLE_RUNTIME_ROOT_DENIED");
+  }
+  const resultParent = await realpath(dirname(resultPath)).catch(() => { throw new Error("M11_DISPOSABLE_RESULT_PATH_DENIED"); });
+  if (!containedBy(evidenceReal, resultParent) || basename(resultPath) !== "m11-disposable-active-result.json") {
+    throw new Error("M11_DISPOSABLE_RESULT_PATH_DENIED");
+  }
+  return requestedRuntimeRoot;
+}
+const runtimeRoot = await validateDisposablePaths();
 
 const realCanaryRoot = "C:\\Workspace\\haios-operator-canary";
 const m10TaskName = "HAIOS-M10-Operator-ReadOnly";
