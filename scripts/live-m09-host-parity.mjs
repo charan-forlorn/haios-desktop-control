@@ -232,6 +232,7 @@ try {
     "run", "--rm",
     "--name", tunnelContainerName,
     "--label", "haios.m09.owner=host-parity",
+    "--entrypoint", "/usr/bin/tunnel-client",
     "-p", `127.0.0.1:${tunnelProxyPort}:8783`,
     "--mount", `type=bind,source=${apiKeyFile},target=/run/secrets/m09-api-key,readonly`,
     "-e", "MCP_EXTRA_HEADERS=X-API-Key: file:/run/secrets/m09-api-key",

@@ -11,6 +11,7 @@ describe("M09 file-backed tunnel dev-proxy parity contract", () => {
     for (const marker of [
       "ghcr.io/openai/tunnel-client:v0.0.11",
       '"dev", "proxy"',
+      '"--entrypoint", "/usr/bin/tunnel-client"',
       "host.docker.internal:${directPort}/mcp",
       syntheticTunnel,
       "18773",
