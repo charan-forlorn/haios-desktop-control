@@ -137,5 +137,7 @@ describe("M06 qualification contract", () => {
       "RUNTIME_RESIDUE=0", "TUNNEL_INTEGRITY=PASS", "PORT_8772_FREE=PASS",
       "HAIOS_DESKTOP_CONTROL_PLANE_R1_M06_READY_FOR_INDEPENDENT_VERIFICATION",
     ]) expect(script).toContain(marker);
+    expect(script).not.toContain("'sk-[A-Za-z0-9_-]+'");
+    expect(script).toContain("(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{20,}");
   });
 });

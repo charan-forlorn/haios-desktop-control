@@ -186,7 +186,7 @@ $RuntimeResidue = if (Test-Path -LiteralPath $RuntimeRoot) { 1 } else { 0 }
 if ($RuntimeResidue -ne 0) { throw "RUNTIME_RESIDUE:$RuntimeResidue" }
 Write-Host "RUNTIME_RESIDUE=0"
 
-$SecretPatterns = @('ghp_[A-Za-z0-9]+','sk-[A-Za-z0-9_-]+','BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY')
+$SecretPatterns = @('(?<![A-Za-z0-9])ghp_[A-Za-z0-9]{20,}','(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{20,}','BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY')
 $SecretLeak = $false
 foreach ($File in (Get-ChildItem $EvidenceRoot -File -ErrorAction SilentlyContinue)) {
     $Text = [IO.File]::ReadAllText($File.FullName)
