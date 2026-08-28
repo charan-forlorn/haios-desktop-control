@@ -1,0 +1,28 @@
+{
+  "policySetId": "haios-desktop-control-m07-task-effects",
+  "version": "1.0.0",
+  "policies": {
+    "default-artifacts-v1": {
+      "allowedArtifactPatterns": [
+        "**/__pycache__/**",
+        "**/.pytest_cache/**",
+        "**/.cache/**",
+        "coverage/**",
+        "dist/**",
+        "*.tsbuildinfo"
+      ],
+      "protectedPatterns": [
+        "src/**",
+        "tests/**",
+        "package.json",
+        "package-lock.json",
+        "tsconfig*.json",
+        ".git/**",
+        ".env*",
+        "**/.env*",
+        "**/*secret*",
+        "**/*credential*"
+      ]
+    }
+  }
+}

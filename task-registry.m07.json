@@ -1,0 +1,64 @@
+{
+  "registryId": "haios-desktop-control-m07-task-registry",
+  "version": "2.0.0",
+  "tasks": {
+    "node.test.run": {
+      "argvTemplate": ["node", "--test", "{{testPath}}"],
+      "paramSchemas": {
+        "testPath": { "kind": "relpath", "mustExist": true, "fileType": "file" }
+      },
+      "requiredParams": ["testPath"],
+      "toolchainProfile": "node22-sandbox-v1",
+      "sandboxProfile": "S0",
+      "networkAuthority": "NONE",
+      "childProcessPolicy": "SANDBOX_OWNED_TREE",
+      "envAllowlist": ["CI"],
+      "effectPolicyRef": "default-artifacts-v1",
+      "timeoutMs": 300000,
+      "stdoutMaxBytes": 65536,
+      "stderrMaxBytes": 65536
+    },
+    "project.build": {
+      "argvTemplate": ["npm", "run", "build"],
+      "paramSchemas": {},
+      "requiredParams": [],
+      "toolchainProfile": "node22-sandbox-v1",
+      "sandboxProfile": "S0",
+      "networkAuthority": "NONE",
+      "childProcessPolicy": "SANDBOX_OWNED_TREE",
+      "envAllowlist": ["CI"],
+      "effectPolicyRef": "default-artifacts-v1",
+      "timeoutMs": 600000,
+      "stdoutMaxBytes": 65536,
+      "stderrMaxBytes": 65536
+    },
+    "project.test": {
+      "argvTemplate": ["npm", "test"],
+      "paramSchemas": {},
+      "requiredParams": [],
+      "toolchainProfile": "node22-sandbox-v1",
+      "sandboxProfile": "S0",
+      "networkAuthority": "NONE",
+      "childProcessPolicy": "SANDBOX_OWNED_TREE",
+      "envAllowlist": ["CI"],
+      "effectPolicyRef": "default-artifacts-v1",
+      "timeoutMs": 600000,
+      "stdoutMaxBytes": 65536,
+      "stderrMaxBytes": 65536
+    },
+    "project.typecheck": {
+      "argvTemplate": ["npm", "run", "typecheck"],
+      "paramSchemas": {},
+      "requiredParams": [],
+      "toolchainProfile": "node22-sandbox-v1",
+      "sandboxProfile": "S0",
+      "networkAuthority": "NONE",
+      "childProcessPolicy": "SANDBOX_OWNED_TREE",
+      "envAllowlist": ["CI"],
+      "effectPolicyRef": "default-artifacts-v1",
+      "timeoutMs": 600000,
+      "stdoutMaxBytes": 65536,
+      "stderrMaxBytes": 65536
+    }
+  }
+}
