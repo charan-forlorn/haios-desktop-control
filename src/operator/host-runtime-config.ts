@@ -1,4 +1,4 @@
-import { lstat, open } from "node:fs/promises";
+import { lstat, open, realpath } from "node:fs/promises";
 import { win32 } from "node:path";
 import { TextDecoder } from "node:util";
 
@@ -106,6 +106,16 @@ export function validateHostOperatorLaunchConfig(value: unknown): HostOperatorLa
 
 export async function loadHostApiKey(path: string): Promise<string> {
   if (!isAbsoluteWindowsPath(path)) fail("M09_API_KEY_PATH_INVALID");
+
+  let canonicalPath: string;
+  try {
+    canonicalPath = await realpath(path);
+  } catch {
+    fail("M09_API_KEY_FILE_INVALID");
+  }
+  if (win32.normalize(canonicalPath).toLowerCase() !== win32.normalize(path).toLowerCase()) {
+    fail("M09_API_KEY_FILE_INVALID");
+  }
 
   let before;
   try {
