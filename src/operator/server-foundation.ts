@@ -90,11 +90,9 @@ function operatorSchemas(taskIds: readonly string[]): Record<OperatorV1ToolName,
   };
 }
 
-export async function createOperatorFoundation(sourcePath?: string): Promise<OperatorFoundation> {
-  const registryPath = sourcePath ?? join(process.cwd(), "task-registry.m05.json");
-  const registry = await loadTaskRegistry(registryPath);
-  const schemas = operatorSchemas(Object.keys(registry.registry.tasks));
-  const tools = OPERATOR_V1_TOOL_NAMES.map((name) => ({
+export function createOperatorToolDefinitions(taskIds: readonly string[]): readonly Tool[] {
+  const schemas = operatorSchemas([...taskIds].sort());
+  return Object.freeze(OPERATOR_V1_TOOL_NAMES.map((name) => ({
     name,
     description: `HAIOS Level B v1 foundation tool ${name}`,
     inputSchema: schemas[name],
@@ -104,8 +102,14 @@ export async function createOperatorFoundation(sourcePath?: string): Promise<Ope
       idempotentHint: name === "operator_status" || name === "operator_capabilities",
       openWorldHint: false,
     },
-  } satisfies Tool));
-  return Object.freeze({ registry, tools: Object.freeze(tools) });
+  } satisfies Tool)));
+}
+
+export async function createOperatorFoundation(sourcePath?: string): Promise<OperatorFoundation> {
+  const registryPath = sourcePath ?? join(process.cwd(), "task-registry.m05.json");
+  const registry = await loadTaskRegistry(registryPath);
+  const tools = createOperatorToolDefinitions(Object.keys(registry.registry.tasks));
+  return Object.freeze({ registry, tools });
 }
 
 export function dispatchOperatorFoundationTool(

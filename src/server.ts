@@ -19,7 +19,12 @@ import {
   READ_TOOL_DEFINITIONS,
 } from "./capabilities.js";
 import { dispatchExecuteTool } from "./execute.js";
-import { createOperatorFoundation, dispatchOperatorFoundationTool } from "./operator/server-foundation.js";
+import {
+  createOperatorFoundation,
+  createOperatorToolDefinitions,
+  dispatchOperatorFoundationTool,
+} from "./operator/server-foundation.js";
+import { dispatchOperatorControlTool, type OperatorControlRuntime } from "./operator/control-runtime.js";
 import { TransactionMutationAdapter } from "./transactions/adapter.js";
 import { createGitCurrentnessProvider, TRANSACTION_PROJECT_ROOT } from "./transactions/currentness.js";
 import { TransactionService, dispatchTransactionTool, type TransactionServiceApi } from "./transactions/service.js";
@@ -48,6 +53,8 @@ export interface GatewayServerConfig {
   readonly transactionService?: TransactionServiceApi;
   readonly protocolMode?: "legacy27" | "operator13";
   readonly operatorTaskRegistryPath?: string;
+  readonly operatorMode?: "READ_ONLY_EMERGENCY" | "ACTIVE";
+  readonly operatorRuntime?: OperatorControlRuntime;
   readonly host?: string;
   readonly port?: number;
 }
@@ -176,9 +183,29 @@ export async function createGatewayServer(
   if (protocolMode !== "legacy27" && protocolMode !== "operator13") {
     throw new Error("M05_PROTOCOL_MODE_DENIED");
   }
-  const operatorFoundation = protocolMode === "operator13"
+  if (protocolMode === "legacy27" && (config.operatorMode !== undefined || config.operatorRuntime !== undefined)) {
+    throw new Error("M08_OPERATOR_CONFIG_PROTOCOL_MISMATCH");
+  }
+  const operatorMode = protocolMode === "operator13"
+    ? (config.operatorMode ?? "READ_ONLY_EMERGENCY")
+    : undefined;
+  if (operatorMode === "ACTIVE" && config.operatorRuntime === undefined) {
+    throw new Error("M08_ACTIVE_RUNTIME_REQUIRED");
+  }
+  if (operatorMode !== "ACTIVE" && config.operatorRuntime !== undefined) {
+    throw new Error("M08_ACTIVE_RUNTIME_NOT_AUTHORIZED");
+  }
+  if (operatorMode === "ACTIVE" && config.operatorTaskRegistryPath !== undefined) {
+    throw new Error("M08_ACTIVE_FOUNDATION_REGISTRY_PATH_DENIED");
+  }
+  const operatorFoundation = protocolMode === "operator13" && operatorMode !== "ACTIVE"
     ? await createOperatorFoundation(config.operatorTaskRegistryPath)
     : undefined;
+  const operatorTools = protocolMode !== "operator13"
+    ? undefined
+    : operatorMode === "ACTIVE"
+      ? createOperatorToolDefinitions(Object.keys(config.operatorRuntime!.registry.registry.tasks))
+      : operatorFoundation!.tools;
   const auditSink = config.auditSink ?? NOOP_AUDIT_SINK;
   const mutationUpstream = protocolMode === "legacy27" && isMutationClient(config.upstream)
     ? config.upstream
@@ -199,7 +226,7 @@ export async function createGatewayServer(
       { capabilities: { tools: {} } },
     );
     mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
-      tools: operatorFoundation?.tools ?? legacyPublicTools(),
+      tools: operatorTools ?? legacyPublicTools(),
     }));
 
     mcp.setRequestHandler(CallToolRequestSchema, async (request) => {
@@ -212,9 +239,11 @@ export async function createGatewayServer(
       let decision: "ALLOW" | "DENY" = "DENY";
 
       try {
-        const operatorDispatch = operatorFoundation === undefined
+        const operatorDispatch = protocolMode !== "operator13"
           ? undefined
-          : dispatchOperatorFoundationTool(name, operatorFoundation);
+          : operatorMode === "ACTIVE"
+            ? await dispatchOperatorControlTool(name, args, config.operatorRuntime!)
+            : dispatchOperatorFoundationTool(name, operatorFoundation!);
         if (operatorDispatch !== undefined) capabilityClass = operatorDispatch.capabilityClass;
         const result = operatorDispatch?.result ??
           (capabilityClass === "MUTATE"
