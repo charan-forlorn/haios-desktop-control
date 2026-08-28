@@ -27,6 +27,11 @@ class FakeGit implements OperatorTransactionGit {
     await mkdir(path, { recursive: true });
     await cp(repo, path, { recursive: true, filter: (source) => !source.includes("\\.git") });
   }
+  async worktreeRemove(_repo: string, path: string) { await rm(path, { recursive: true, force: true }); }
+  async deleteBranch(_repo: string, _branch: string) {}
+  async addAll(_cwd: string) {}
+  async commit(_cwd: string, _message: string) { return "b".repeat(40); }
+  async isAncestor(_cwd: string, _ancestor: string, _descendant: string) { return true; }
 }
 
 async function fixture() {

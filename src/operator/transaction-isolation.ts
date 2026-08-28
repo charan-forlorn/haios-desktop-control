@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { access, lstat, realpath, readFile } from "node:fs/promises";
+import { access, lstat, mkdir, realpath, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join, win32 } from "node:path";
 
 import type {
@@ -12,6 +12,11 @@ export interface OperatorTransactionGit {
   head(cwd: string): Promise<string>;
   status(cwd: string): Promise<string>;
   worktreeAdd(repo: string, path: string, branch: string, startPoint: string): Promise<void>;
+  worktreeRemove(repo: string, path: string): Promise<void>;
+  deleteBranch(repo: string, branch: string): Promise<void>;
+  addAll(cwd: string): Promise<void>;
+  commit(cwd: string, message: string): Promise<string>;
+  isAncestor(cwd: string, ancestor: string, descendant: string): Promise<boolean>;
 }
 
 export interface OperatorTransactionServiceConfig {
@@ -286,6 +291,98 @@ export class OperatorTransactionService {
     record.state = "VALIDATED";
     return allow(record);
   }
+  async #canonicalStillCurrent(record: MutableRecord): Promise<boolean> {
+    return (await this.#git.head(record.canonicalRoot)) === record.baseHeadSha &&
+      (await this.#git.status(record.canonicalRoot)).trim().length === 0;
+  }
+
+  async #discard(record: MutableRecord): Promise<boolean> {
+    let clean = true;
+    try { await this.#git.worktreeRemove(record.canonicalRoot, record.worktreePath); }
+    catch { clean = false; }
+    try { await this.#git.deleteBranch(record.canonicalRoot, record.branchName); }
+    catch { clean = false; }
+    record.state = "ROLLED_BACK";
+    return clean;
+  }
+
+  async #applyIntent(record: MutableRecord, intent: OperatorTransactionIntent): Promise<boolean> {
+    if (!(await this.#revalidateIntent(record, intent))) return false;
+    if (intent.kind === "create") {
+      const target = await authorizeCandidate(record.worktreePath, intent.relPath, false);
+      const content = decodeBase64(intent.contentBase64);
+      if (target.decision !== "ALLOW" || content === null || await exists(target.absolutePath)) return false;
+      await mkdir(win32.dirname(target.absolutePath), { recursive: true });
+      await writeFile(target.absolutePath, content, { flag: "wx" });
+      return true;
+    }
+    if (intent.kind === "patch") {
+      const source = await this.#source(record, intent.relPath, intent.preimageSha256);
+      const content = decodeBase64(intent.newContentBase64);
+      if (source.decision !== "ALLOW" || content === null) return false;
+      await writeFile(source.absolutePath, content);
+      return true;
+    }
+    if (intent.kind === "move") {
+      const source = await this.#source(record, intent.fromRel, intent.preimageSha256);
+      const target = await authorizeCandidate(record.worktreePath, intent.toRel, false);
+      if (source.decision !== "ALLOW" || target.decision !== "ALLOW" || await exists(target.absolutePath)) return false;
+      await mkdir(win32.dirname(target.absolutePath), { recursive: true });
+      await rename(source.absolutePath, target.absolutePath);
+      return true;
+    }
+    const source = await this.#source(record, intent.relPath, intent.preimageSha256);
+    if (source.decision !== "ALLOW") return false;
+    await rm(source.absolutePath, { force: false });
+    return true;
+  }
+
+  async apply(txId: string): Promise<OperatorTransactionResult> {
+    const record = this.#record(txId);
+    if (record === undefined) return { decision: "DENY", reason: "TRANSACTION_NOT_FOUND" };
+    if (record.state !== "VALIDATED") return { decision: "DENY", reason: "INVALID_TRANSACTION_STATE" };
+    if (!(await this.#canonicalStillCurrent(record))) return { decision: "DENY", reason: "CANONICAL_DRIFT" };
+    if ((await this.#git.head(record.worktreePath)) !== record.baseHeadSha) return { decision: "DENY", reason: "WORKTREE_HEAD_DRIFT" };
+    try {
+      for (const intent of record.intents) {
+        if (!(await this.#applyIntent(record, intent))) throw new Error("INTENT_DRIFT");
+      }
+      if (!(await this.#canonicalStillCurrent(record))) throw new Error("CANONICAL_DRIFT");
+      record.state = "APPLIED";
+      return allow(record);
+    } catch {
+      const discarded = await this.#discard(record);
+      return discarded
+        ? { decision: "DENY", reason: "APPLY_FAILED_TRANSACTION_DISCARDED" }
+        : { decision: "DENY", reason: "APPLY_FAILED_CLEANUP_PENDING" };
+    }
+  }
+  async checkpoint(txId: string, message: string): Promise<OperatorTransactionResult> {
+    const record = this.#record(txId);
+    if (record === undefined) return { decision: "DENY", reason: "TRANSACTION_NOT_FOUND" };
+    if (record.state !== "APPLIED") return { decision: "DENY", reason: "INVALID_TRANSACTION_STATE" };
+    if (message.trim().length === 0 || message.length > 200) return { decision: "DENY", reason: "INVALID_COMMIT_MESSAGE" };
+    if (!(await this.#canonicalStillCurrent(record))) return { decision: "DENY", reason: "CANONICAL_DRIFT" };
+    let checkpointId: string;
+    try {
+      await this.#git.addAll(record.worktreePath);
+      checkpointId = await this.#git.commit(record.worktreePath, message);
+    } catch {
+      return { decision: "DENY", reason: "CHECKPOINT_FAILED" };
+    }
+    if (!FULL_GIT_SHA.test(checkpointId)) return { decision: "DENY", reason: "CHECKPOINT_INVALID" };
+    if (!(await this.#git.isAncestor(record.worktreePath, record.baseHeadSha, checkpointId))) {
+      return { decision: "DENY", reason: "CHECKPOINT_NOT_DESCENDANT" };
+    }
+    if ((await this.#git.status(record.worktreePath)).trim().length !== 0) {
+      return { decision: "DENY", reason: "CHECKPOINT_WORKTREE_DIRTY" };
+    }
+    if (!(await this.#canonicalStillCurrent(record))) return { decision: "DENY", reason: "CANONICAL_DRIFT" };
+    record.checkpointId = checkpointId;
+    record.state = "CHECKPOINTED";
+    return allow(record);
+  }
+
   async status(txId: string): Promise<OperatorTransactionStatusResult> {
     const record = this.#record(txId);
     if (record === undefined) return { decision: "DENY", reason: "TRANSACTION_NOT_FOUND" };
