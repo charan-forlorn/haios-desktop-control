@@ -89,6 +89,17 @@ describe("M09 adversarial authority boundary", () => {
 import { readFile as readText } from "node:fs/promises";
 
 describe("M09 qualification fail-closed contract", () => {
+  it("revalidates the canonical secret path after handle open and after read", async () => {
+    const source = await readText(join(process.cwd(), "src", "operator", "host-runtime-config.ts"), "utf8");
+    const openIndex = source.indexOf('await open(path, "r")');
+    const readIndex = source.indexOf("await handle.readFile()", openIndex);
+    const canonicalChecks = [...source.matchAll(/await realpath\(path\)/gu)].map((match) => match.index ?? -1);
+    expect(openIndex).toBeGreaterThanOrEqual(0);
+    expect(readIndex).toBeGreaterThan(openIndex);
+    expect(canonicalChecks.some((index) => index > openIndex && index < readIndex)).toBe(true);
+    expect(canonicalChecks.some((index) => index > readIndex)).toBe(true);
+  });
+
   it("requires long-lived emergency mode before any disposable ACTIVE proof", async () => {
     const qualifier = await readText(join(process.cwd(), "scripts", "qualify-m09.ps1"), "utf8");
     for (const marker of [

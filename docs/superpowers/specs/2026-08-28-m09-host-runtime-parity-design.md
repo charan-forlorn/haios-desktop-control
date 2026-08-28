@@ -53,7 +53,8 @@ Registry/effect paths are not configurable. The launcher binds repository `task-
 - file size is 16..512 bytes;
 - at most one final LF or CRLF is removed;
 - resulting value is 16..512 characters;
-- no NUL, CR, LF, leading/trailing whitespace remains.
+- no Unicode control, format, or whitespace character remains anywhere in the resulting value;
+- canonical path identity is revalidated after handle open and again after read, with handle/path metadata required to remain identical.
 
 Errors contain only stable reason codes, never secret bytes. The key is held only in memory and passed directly to `createGatewayServer`; it is never returned in metadata or written to evidence.
 

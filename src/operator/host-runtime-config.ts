@@ -113,7 +113,9 @@ export async function loadHostApiKey(path: string): Promise<string> {
   } catch {
     fail("M09_API_KEY_FILE_INVALID");
   }
-  if (win32.normalize(canonicalPath).toLowerCase() !== win32.normalize(path).toLowerCase()) {
+  const normalizeCanonical = (value: string) => win32.normalize(value).toLowerCase();
+  const requestedCanonical = normalizeCanonical(path);
+  if (normalizeCanonical(canonicalPath) !== requestedCanonical) {
     fail("M09_API_KEY_FILE_INVALID");
   }
 
@@ -153,6 +155,22 @@ export async function loadHostApiKey(path: string): Promise<string> {
       fail("M09_API_KEY_FILE_INVALID");
     }
 
+    let canonicalAfterOpen: string;
+    let currentAfterOpen;
+    try {
+      canonicalAfterOpen = await realpath(path);
+      currentAfterOpen = await lstat(path);
+    } catch {
+      fail("M09_API_KEY_FILE_INVALID");
+    }
+    if (
+      normalizeCanonical(canonicalAfterOpen) !== requestedCanonical
+      || normalizeCanonical(canonicalAfterOpen) !== normalizeCanonical(canonicalPath)
+      || !currentAfterOpen.isFile()
+      || currentAfterOpen.isSymbolicLink()
+      || !sameSnapshot(opened, currentAfterOpen)
+    ) fail("M09_API_KEY_FILE_INVALID");
+
     try {
       bytes = await handle.readFile();
     } catch {
@@ -161,15 +179,22 @@ export async function loadHostApiKey(path: string): Promise<string> {
 
     let afterRead;
     let current;
+    let canonicalAfterRead: string;
     try {
       afterRead = await handle.stat();
       current = await lstat(path);
+      canonicalAfterRead = await realpath(path);
     } catch {
       fail("M09_API_KEY_FILE_INVALID");
     }
-    if (!current.isFile() || current.isSymbolicLink() || !sameSnapshot(opened, afterRead) || !sameSnapshot(opened, current)) {
-      fail("M09_API_KEY_FILE_INVALID");
-    }
+    if (
+      normalizeCanonical(canonicalAfterRead) !== requestedCanonical
+      || normalizeCanonical(canonicalAfterRead) !== normalizeCanonical(canonicalPath)
+      || !current.isFile()
+      || current.isSymbolicLink()
+      || !sameSnapshot(opened, afterRead)
+      || !sameSnapshot(opened, current)
+    ) fail("M09_API_KEY_FILE_INVALID");
   } finally {
     await handle.close().catch(() => undefined);
   }
@@ -191,8 +216,7 @@ export async function loadHostApiKey(path: string): Promise<string> {
   if (
     characterCount < 16
     || characterCount > 512
-    || /[\0\r\n]/u.test(value)
-    || value.trim() !== value
+    || /[\p{Cc}\p{Cf}\p{White_Space}]/u.test(value)
   ) fail("M09_API_KEY_FILE_INVALID");
   return value;
 }
