@@ -1,0 +1,111 @@
+import { describe, expect, it } from "vitest";
+
+import {
+  M11_ACTIVE_CANARY_PRODUCTION_PORT,
+  validateM11ActiveCanaryConfig,
+} from "../src/operator/m11-active-canary-config.js";
+
+const CANARY_ROOT = "C:\\Workspace\\haios-operator-canary";
+
+function validConfig(): Record<string, unknown> {
+  return {
+    apiKeyFile: "C:\\state\\operator-api-key.txt",
+    worktreeRoot: "C:\\runtime\\m11-worktrees",
+    allowedProjects: { "operator-canary": CANARY_ROOT },
+    port: 8769,
+    mode: "ACTIVE",
+    activationScope: "M11_CANARY_ONLY",
+  };
+}
+
+describe("M11 ACTIVE-canary config boundary", () => {
+  it("accepts and freezes only the exact canary authority shape", () => {
+    const input = validConfig();
+    const result = validateM11ActiveCanaryConfig(input);
+
+    (input.allowedProjects as Record<string, string>).extra = "C:\\projects\\extra";
+    input.port = 9999;
+
+    expect(result).toEqual(validConfig());
+    expect(Object.isFrozen(result)).toBe(true);
+    expect(Object.isFrozen(result.allowedProjects)).toBe(true);
+    expect(M11_ACTIVE_CANARY_PRODUCTION_PORT).toBe(8769);
+  });
+
+  it("rejects anything but one own operator-canary project at its canonical root", () => {
+    const inheritedProjects = Object.create({ "operator-canary": CANARY_ROOT }) as Record<string, string>;
+    const inheritedExtra = Object.create({ hidden: "C:\\projects\\hidden" }) as Record<string, string>;
+    inheritedExtra["operator-canary"] = CANARY_ROOT;
+
+    for (const allowedProjects of [
+      {},
+      { demo: CANARY_ROOT },
+      { "operator-canary": "C:\\Workspace\\other-project" },
+      { "operator-canary": "c:\\Workspace\\haios-operator-canary" },
+      { "operator-canary": CANARY_ROOT, demo: "C:\\projects\\demo" },
+      inheritedProjects,
+      inheritedExtra,
+      Object.assign(Object.create(null), { "operator-canary": CANARY_ROOT }),
+      ["operator-canary"],
+    ]) {
+      expect(() => validateM11ActiveCanaryConfig({ ...validConfig(), allowedProjects }))
+        .toThrow("M11_ACTIVE_CANARY_CONFIG_DENIED");
+    }
+  });
+
+  it("rejects unknown, inherited, prototype, symbol, and accessor fields", () => {
+    const inheritedConfig = Object.create({ port: 8769 }) as Record<string, unknown>;
+    Object.assign(inheritedConfig, validConfig());
+    delete inheritedConfig.port;
+    const symbolConfig = { ...validConfig(), [Symbol("extra")]: true };
+    const accessorConfig = validConfig();
+    Object.defineProperty(accessorConfig, "port", {
+      enumerable: true,
+      get() { return 8769; },
+    });
+
+    for (const value of [
+      null,
+      [],
+      Object.assign(Object.create(null), validConfig()),
+      inheritedConfig,
+      { ...validConfig(), host: "127.0.0.1" },
+      { ...validConfig(), runtime: {} },
+      symbolConfig,
+      accessorConfig,
+    ]) {
+      expect(() => validateM11ActiveCanaryConfig(value)).toThrow("M11_ACTIVE_CANARY_CONFIG_DENIED");
+    }
+  });
+
+  it("rejects inline secret authority and non-file-backed or non-absolute paths", () => {
+    for (const value of [
+      { ...validConfig(), apiKey: "SENSITIVE-KEY-BYTES" },
+      { ...validConfig(), apiKeyValue: "SENSITIVE-KEY-BYTES" },
+      { ...validConfig(), apiKeyFile: "SENSITIVE-KEY-BYTES" },
+      { ...validConfig(), apiKeyFile: "operator-api-key.txt" },
+      { ...validConfig(), apiKeyFile: "\\state\\operator-api-key.txt" },
+      { ...validConfig(), worktreeRoot: "m11-worktrees" },
+      { ...validConfig(), worktreeRoot: "\\runtime\\m11-worktrees" },
+    ]) {
+      expect(() => validateM11ActiveCanaryConfig(value)).toThrow("M11_ACTIVE_CANARY_CONFIG_DENIED");
+    }
+  });
+
+  it("rejects every mode, scope, and port except the live M11 canary values", () => {
+    const { activationScope: _activationScope, ...configWithoutScope } = validConfig();
+
+    for (const value of [
+      { ...validConfig(), mode: "READ_ONLY_EMERGENCY" },
+      { ...validConfig(), mode: "ACTIVE", activationScope: "M09_TEST_ONLY" },
+      { ...validConfig(), mode: "ACTIVE", activationScope: "M10_TEST_ONLY" },
+      configWithoutScope,
+      { ...validConfig(), port: 8768 },
+      { ...validConfig(), port: 8774 },
+      { ...validConfig(), port: 8769.5 },
+      { ...validConfig(), port: "8769" },
+    ]) {
+      expect(() => validateM11ActiveCanaryConfig(value)).toThrow("M11_ACTIVE_CANARY_CONFIG_DENIED");
+    }
+  });
+});
