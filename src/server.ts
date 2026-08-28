@@ -19,6 +19,7 @@ import {
   READ_TOOL_DEFINITIONS,
 } from "./capabilities.js";
 import { dispatchExecuteTool } from "./execute.js";
+import { createOperatorFoundation, dispatchOperatorFoundationTool } from "./operator/server-foundation.js";
 import { TransactionMutationAdapter } from "./transactions/adapter.js";
 import { createGitCurrentnessProvider, TRANSACTION_PROJECT_ROOT } from "./transactions/currentness.js";
 import { TransactionService, dispatchTransactionTool, type TransactionServiceApi } from "./transactions/service.js";
@@ -45,6 +46,8 @@ export interface GatewayServerConfig {
   readonly upstream: DesktopCommanderReadClient;
   readonly auditSink?: AuditSink;
   readonly transactionService?: TransactionServiceApi;
+  readonly protocolMode?: "legacy27" | "operator13";
+  readonly operatorTaskRegistryPath?: string;
   readonly host?: string;
   readonly port?: number;
 }
@@ -141,7 +144,7 @@ Object.assign(INPUT_SCHEMAS, {
   transaction_status: objectSchema({ transactionId: STRING }, ["transactionId"]),
 });
 
-function publicTools(): Tool[] {
+function legacyPublicTools(): Tool[] {
   return [...READ_TOOL_DEFINITIONS, ...EXECUTE_TOOL_DEFINITIONS, ...MUTATE_TOOL_DEFINITIONS].map(
     ({ name, capabilityClass }) => ({
       name,
@@ -169,8 +172,17 @@ export async function createGatewayServer(
     throw new Error("M01_GATEWAY_API_KEY_REQUIRED");
   }
 
+  const protocolMode = config.protocolMode ?? "legacy27";
+  if (protocolMode !== "legacy27" && protocolMode !== "operator13") {
+    throw new Error("M05_PROTOCOL_MODE_DENIED");
+  }
+  const operatorFoundation = protocolMode === "operator13"
+    ? await createOperatorFoundation(config.operatorTaskRegistryPath)
+    : undefined;
   const auditSink = config.auditSink ?? NOOP_AUDIT_SINK;
-  const mutationUpstream = isMutationClient(config.upstream) ? config.upstream : undefined;
+  const mutationUpstream = protocolMode === "legacy27" && isMutationClient(config.upstream)
+    ? config.upstream
+    : undefined;
   const transactionService = config.transactionService ?? (mutationUpstream === undefined ? undefined : new TransactionService({
     currentness: createGitCurrentnessProvider(),
     adapter: new TransactionMutationAdapter(mutationUpstream),
@@ -187,7 +199,7 @@ export async function createGatewayServer(
       { capabilities: { tools: {} } },
     );
     mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
-      tools: publicTools(),
+      tools: operatorFoundation?.tools ?? legacyPublicTools(),
     }));
 
     mcp.setRequestHandler(CallToolRequestSchema, async (request) => {
@@ -195,13 +207,17 @@ export async function createGatewayServer(
       const requestId = randomUUID();
       const name = request.params.name;
       const args = request.params.arguments ?? {};
-      const capabilityClass = classifyGatewayTool(name);
+      let capabilityClass = protocolMode === "operator13" ? "UNKNOWN" : classifyGatewayTool(name);
       let resultClass: "SUCCESS" | "DENIED" | "ERROR" | "TRUNCATED" = "ERROR";
       let decision: "ALLOW" | "DENY" = "DENY";
 
       try {
-        const result =
-          capabilityClass === "MUTATE"
+        const operatorDispatch = operatorFoundation === undefined
+          ? undefined
+          : dispatchOperatorFoundationTool(name, operatorFoundation);
+        if (operatorDispatch !== undefined) capabilityClass = operatorDispatch.capabilityClass;
+        const result = operatorDispatch?.result ??
+          (capabilityClass === "MUTATE"
             ? transactionService === undefined
               ? { decision: "DENY" as const, reason: "MUTATE_SERVICE_UNAVAILABLE" }
               : await dispatchTransactionTool(transactionService, name, args)
@@ -209,7 +225,7 @@ export async function createGatewayServer(
               ? isExecuteClient(config.upstream)
                 ? await dispatchExecuteTool(name, args, { upstream: config.upstream })
                 : { decision: "DENY" as const, reason: "EXECUTE_UPSTREAM_UNAVAILABLE" }
-              : await dispatchReadTool(name, args, { upstream: config.upstream });
+              : await dispatchReadTool(name, args, { upstream: config.upstream }));
         decision = result.decision;
         resultClass =
           result.decision === "DENY"
