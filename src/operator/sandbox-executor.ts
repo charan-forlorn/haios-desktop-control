@@ -28,6 +28,9 @@ export interface SandboxExecutionResult {
   readonly exitCode?: number;
   readonly stdout: string;
   readonly stderr: string;
+  readonly stdoutBytes: number;
+  readonly stderrBytes: number;
+  readonly timedOut: boolean;
   readonly stdoutTruncated: boolean;
   readonly stderrTruncated: boolean;
   readonly cleanupVerified: boolean;
@@ -159,7 +162,8 @@ export class SandboxExecutor {
     const startedAt = Date.now();
     const denied = (reason: string, cleanupVerified = false, exitCode?: number): SandboxExecutionResult => ({
       decision: "DENY", reason, ...(exitCode === undefined ? {} : { exitCode }),
-      stdout: "", stderr: "", stdoutTruncated: false, stderrTruncated: false,
+      stdout: "", stderr: "", stdoutBytes: 0, stderrBytes: 0, timedOut: false,
+      stdoutTruncated: false, stderrTruncated: false,
       cleanupVerified, durationMs: Date.now() - startedAt,
     });
     if (!safeId(request.transactionId)) return denied("SANDBOX_TRANSACTION_ID_DENIED");
@@ -181,7 +185,13 @@ export class SandboxExecutor {
 
     if (request.execution.sandboxProfile === "S1") {
       fixtureCreated = await this.#startFixture(request.transactionId, runId, fixtureName);
-      if (!fixtureCreated) return denied("SANDBOX_FIXTURE_START_FAILED");
+      if (!fixtureCreated) {
+        const fixtureClean = await this.#removeOwnedContainer(fixtureName, request.transactionId);
+        return denied(
+          fixtureClean ? "SANDBOX_FIXTURE_START_FAILED" : "SANDBOX_CLEANUP_UNVERIFIED",
+          fixtureClean,
+        );
+      }
     }
 
     const runArgs = [
@@ -194,6 +204,8 @@ export class SandboxExecutor {
       ...request.execution.argv,
     ];
     const task = await this.#docker(runArgs, request.execution.timeoutMs);
+    const stdoutBytes = Buffer.byteLength(task.stdout, "utf8");
+    const stderrBytes = Buffer.byteLength(task.stderr, "utf8");
     const secretOutput = containsSecretOutput(task.stdout) || containsSecretOutput(task.stderr);
     const stdout = secretOutput ? { text: "", truncated: false } : boundText(task.stdout, request.execution.stdoutMaxBytes);
     const stderr = secretOutput ? { text: "", truncated: false } : boundText(task.stderr, request.execution.stderrMaxBytes);
@@ -205,6 +217,9 @@ export class SandboxExecutor {
     const base = {
       stdout: stdout.text,
       stderr: stderr.text,
+      stdoutBytes,
+      stderrBytes,
+      timedOut: task.timedOut,
       stdoutTruncated: stdout.truncated,
       stderrTruncated: stderr.truncated,
       cleanupVerified,

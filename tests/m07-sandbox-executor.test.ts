@@ -64,6 +64,8 @@ describe("M07 pinned Docker sandbox executor", () => {
     });    expect(result.decision).toBe("ALLOW");
     expect(result.stdout).toBe("ok-output-abcdef");
     expect(result.stderr).toBe("err-output-abcde");
+    expect(result.stdoutBytes).toBe(Buffer.byteLength("ok-output-abcdefghijklmnopqrstuvwxyz"));
+    expect(result.stderrBytes).toBe(Buffer.byteLength("err-output-abcdefghijklmnopqrstuvwxyz"));
     expect(result.stdoutTruncated).toBe(true);
     expect(result.stderrTruncated).toBe(true);
     const run = fx.calls.find((args) => args[0] === "run")!;
@@ -134,6 +136,32 @@ describe("M07 pinned Docker sandbox executor", () => {
     expect(fixture).toEqual(expect.arrayContaining(["--network", "none"]));
     const task = fx.calls.find((args) => args[0] === "run" && !args.includes("-d"))!;
     expect(task).toEqual(expect.arrayContaining(["--network", "container:haios-m07-fixture-abc123"]));
+  });
+
+  it("cleans an owned S1 fixture after failed or timed-out detached startup", async () => {
+    const calls: string[][] = [];
+    const docker: DockerExecutor = async (args) => { calls.push([...args]); if (args[0] === "run" && args.includes("-d")) return { stdout: "fixture-id", stderr: "timeout", exitCode: 1, timedOut: true }; if (args[0] === "inspect") return { stdout: "m07|txn_test", stderr: "", exitCode: 0, timedOut: false }; if (args[0] === "rm") return { stdout: "", stderr: "", exitCode: 0, timedOut: false }; return { stdout: "", stderr: "", exitCode: 0, timedOut: false }; };
+    const sandbox = new SandboxExecutor({ docker, idFactory: () => "abc123" });
+    const result = await sandbox.execute({ transactionId: "txn_test", execution: execution("S1"), worktreePath: "C:\\Workspace\\tx-worktree", safeEnvironment: { CI: "1" }, fixtureProfileId: "m07-http-fixture-v1" });
+    expect(result).toMatchObject({ decision: "DENY", reason: "SANDBOX_FIXTURE_START_FAILED", cleanupVerified: true });
+    expect(calls.some((args) => args[0] === "inspect" && args.includes("haios-m07-fixture-abc123"))).toBe(true);
+    expect(calls.some((args) => args[0] === "rm" && args.includes("haios-m07-fixture-abc123"))).toBe(true);
+    expect(calls.filter((args) => args[0] === "run")).toHaveLength(1);
+  });
+
+  it("never removes a foreign fixture after failed detached startup", async () => {
+    const calls: string[][] = [];
+    const docker: DockerExecutor = async (args) => {
+      calls.push([...args]);
+      if (args[0] === "inspect") return { stdout: "foreign|txn_other", stderr: "", exitCode: 0, timedOut: false };
+      return { stdout: "", stderr: "", exitCode: 1, timedOut: args[0] === "run" };
+    };
+    const sandbox = new SandboxExecutor({ docker, idFactory: () => "abc123" });
+    const result = await sandbox.execute({ transactionId: "txn_test", execution: execution("S1"),
+      worktreePath: "C:\\Workspace\\tx-worktree", safeEnvironment: { CI: "1" }, fixtureProfileId: "m07-http-fixture-v1" });
+    expect(result).toMatchObject({ decision: "DENY", reason: "SANDBOX_CLEANUP_UNVERIFIED", cleanupVerified: false });
+    expect(calls.some((args) => args[0] === "inspect")).toBe(true);
+    expect(calls.some((args) => args[0] === "rm")).toBe(false);
   });
 
   it("forces --pull never on task and fixture Docker runs", async () => {

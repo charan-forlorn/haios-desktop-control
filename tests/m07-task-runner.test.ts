@@ -1,4 +1,5 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -13,8 +14,8 @@ afterEach(async () => {
 });
 
 async function fixture() {
-  const canonical = await mkdtemp("C:\\Workspace\\m07-runner-canonical-");
-  const worktree = await mkdtemp("C:\\Workspace\\m07-runner-worktree-");
+  const canonical = await mkdtemp(join(tmpdir(), "m07-runner-canonical-"));
+  const worktree = await mkdtemp(join(tmpdir(), "m07-runner-worktree-"));
   roots.push(canonical, worktree);
   await mkdir(join(worktree, "tests"), { recursive: true });
   await writeFile(join(worktree, "tests", "sample.test.mjs"), "export {};", "utf8");
@@ -25,7 +26,7 @@ async function fixture() {
 
 const SHA = "a".repeat(40);
 function allowSandbox(): SandboxExecutionResult {
-  return { decision: "ALLOW", exitCode: 0, stdout: "ok", stderr: "", stdoutTruncated: false, stderrTruncated: false, cleanupVerified: true, durationMs: 3 };
+  return { decision: "ALLOW", exitCode: 0, stdout: "ok", stderr: "", stdoutBytes: 2, stderrBytes: 0, timedOut: false, stdoutTruncated: false, stderrTruncated: false, cleanupVerified: true, durationMs: 3 };
 }
 async function setup(state = "APPLIED") {
   const fx = await fixture();
@@ -80,6 +81,22 @@ describe("M07 internal bounded task runner", () => {
       expect(fx.getSandboxCalls()).toBe(0);
     },
   );
+
+  it.each(["shell", "cwd", "env", "executable"])("denies undeclared top-level request field %s", async (field) => {
+    const fx = await setup();
+    const request: Record<string, unknown> = { txId: "txn_test", taskId: "node.test.run", params: { testPath: "tests/sample.test.mjs" }, expectedRegistrySha256: fx.registry.sha256, [field]: field === "env" ? { CI: "1" } : "forbidden" };
+    const result = await fx.runner.run(request as never);
+    expect(result).toMatchObject({ decision: "DENY", reason: "TASK_REQUEST_FIELDS_DENIED" });
+    expect(fx.getSandboxCalls()).toBe(0);
+  });
+  it("returns the approved audit/currentness metadata contract", async () => {
+    const fx = await setup();
+    const result = await fx.runner.run({ txId: "txn_test", taskId: "node.test.run", params: { testPath: "tests/sample.test.mjs" }, expectedRegistrySha256: fx.registry.sha256 });
+    expect(result).toMatchObject({ decision: "ALLOW", metadata: { decision: "ALLOW", reason: null, exitCode: 0, sandboxReason: null, timedOut: false, registryId: "haios-desktop-control-m07-task-registry", registryVersion: "2.0.0", registrySha256: fx.registry.sha256, effectPolicySetId: "haios-desktop-control-m07-task-effects", effectPolicyVersion: "1.0.0", effectPolicyId: "default-artifacts-v1", effectPolicySha256: fx.effects.sha256, sandboxProfile: "S0", toolchainProfile: "node22-sandbox-v1", transactionId: "txn_test", worktreePath: fx.worktree, cleanupVerified: true, stdoutBytes: 2, stderrBytes: 0, stdoutTruncated: false, stderrTruncated: false, canonicalPreHead: SHA, canonicalPostHead: SHA } });
+    expect(result.metadata.canonicalPreStateDigest).toMatch(/^[a-f0-9]{64}$/);
+    expect(result.metadata.canonicalPostStateDigest).toBe(result.metadata.canonicalPreStateDigest);
+    expect(result.metadata.durationMs).toBe(3); expect(result.metadata.effectSummary.total).toBe(0);
+  });
 
   it("denies registry currentness drift before sandbox execution", async () => {
     const fx = await setup();
@@ -137,6 +154,6 @@ describe("M07 internal bounded task runner", () => {
       txId: "txn_test", taskId: "node.test.run", params: { testPath: "tests/sample.test.mjs" },
       expectedRegistrySha256: fx.registry.sha256,
     });
-    expect(result).toMatchObject({ decision: "DENY", reason: "TASK_SANDBOX_FAILED", exitCode: 2 });
+    expect(result).toMatchObject({ decision: "DENY", reason: "TASK_SANDBOX_FAILED", exitCode: 2, metadata: { decision: "DENY", reason: "TASK_SANDBOX_FAILED", exitCode: 2, sandboxReason: "SANDBOX_EXIT_NONZERO", timedOut: false } });
   });
 });
