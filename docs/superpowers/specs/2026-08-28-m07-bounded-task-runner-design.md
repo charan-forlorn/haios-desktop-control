@@ -1,6 +1,6 @@
 # M07 Internal Bounded Task Runner S0/S1
 **Mission:** `HAIOS_DESKTOP_CONTROL_PLANE_R1_M07_BOUNDED_TASK_RUNNER`
-**Status:** APPROACH APPROVED — WRITTEN SPEC PENDING HUMAN REVIEW
+**Status:** APPROVED — IMPLEMENTATION AUTHORIZED
 **Date:** 2026-08-28
 **Approach:** A — qualify an internal bounded runner before any public Operator activation
 **Parent milestone:** M06 `HAIOS_DESKTOP_CONTROL_PLANE_R1_M06_ISOLATED_CHECKPOINT_CAS_QUALIFIED`
@@ -191,10 +191,13 @@ Dependency provisioning for real-project activation is therefore an explicit M08
 M07 is expected to add these focused units:
 - `task-registry.m07.json` — R1.2-complete production task recipes;
 - `task-effects.m07.json` — versioned qualified Task Effect Policies;
-- `Dockerfile.sandbox-node` — pinned mutable-code Node sandbox image;
-- `src/operator/task-registry-v2.ts` — registry validation and typed argv resolution;
-- `src/operator/task-effects.ts` — effect-policy validation, bounded manifest inventory, delta classification;
-- `src/operator/task-sandbox.ts` — fixed Docker S0/S1 lifecycle and ownership enforcement;
+- pinned existing mutable-code image `haios-operator-sandbox-node@sha256:4c1909633b4c7c6e8dfce3e7994bacaf81ac30808a055d4ba790e9b7c366dcfe` — reused without implicit pull or rebuild;
+- `src/operator/task-contract-v2.ts` — R1.2-complete registry validation and hash binding;
+- `src/operator/task-resolver.ts` — typed argv/path resolution;
+- `src/operator/task-effects.ts` — effect-policy validation and hash binding;
+- `src/operator/task-effect-manifest.ts` — bounded manifest inventory and delta classification;
+- `src/operator/sandbox-toolchains.ts` — pinned toolchain identity and resource ceilings;
+- `src/operator/sandbox-executor.ts` — fixed Docker S0/S1 lifecycle and ownership enforcement;
 - `src/operator/task-runner.ts` — transaction/currentness/effect/output orchestration;
 - focused M07 unit/integration/adversarial tests and synthetic fixtures;
 - `scripts/qualify-m07.ps1` — deterministic live qualification and evidence handoff.
@@ -260,7 +263,7 @@ The M07 qualified default sandbox profile uses these hard ceilings unless a task
 - effect-inventory maximum: 50,000 files, 64 MiB per inventoried file, and 1 GiB total inventoried bytes.
 
 Exceeding any bound is a deterministic failure, never an implicit relaxation.
-The sandbox image uses Node 24 and must be pinned/sealed to an immutable qualification identity before final certification.
+The qualified sandbox image uses Node 22.23.2 and is pinned to `haios-operator-sandbox-node@sha256:4c1909633b4c7c6e8dfce3e7994bacaf81ac30808a055d4ba790e9b7c366dcfe`; any runtime identity drift requires requalification.
 
 ## 18. Qualification Claim Boundary
 The four production M07 recipes are executed end-to-end against a synthetic dependency-free Node fixture so their fixed recipe mechanics are live-qualified without package download authority.
