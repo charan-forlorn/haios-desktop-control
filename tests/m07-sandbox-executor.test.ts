@@ -123,24 +123,36 @@ describe("M07 pinned Docker sandbox executor", () => {
     expect(result).toMatchObject({ decision: "DENY", reason: "SANDBOX_ENV_DENIED" });
     expect(fx.calls).toHaveLength(0);
   });
-  it("creates an internal owned S1 fixture network only for the fixed fixture profile", async () => {
+  it("isolates S1 in the fixed fixture container network namespace with no bridge or gateway", async () => {
     const fx = fakeDocker();
     const sandbox = new SandboxExecutor({ docker: fx.executor, idFactory: () => "abc123" });
-    const result = await sandbox.execute({
-      transactionId: "txn_test",
-      execution: execution("S1"),
-      worktreePath: "C:\\Workspace\\tx-worktree",
-      safeEnvironment: { CI: "1" },
-      fixtureProfileId: "m07-http-fixture-v1",
-    });
+    const result = await sandbox.execute({ transactionId: "txn_test", execution: execution("S1"),
+      worktreePath: "C:\\Workspace\\tx-worktree", safeEnvironment: { CI: "1" }, fixtureProfileId: "m07-http-fixture-v1" });
     expect(result.decision).toBe("ALLOW");
-    const network = fx.calls.find((args) => args[0] === "network" && args[1] === "create")!;
-    expect(network).toContain("--internal");
-    const run = fx.calls.find((args) => args[0] === "run" && args.includes("--entrypoint"))!;
-    expect(run).toEqual(expect.arrayContaining(["--network", "haios-m07-net-abc123"]));
+    expect(fx.calls.some((args) => args[0] === "network" && args[1] === "create")).toBe(false);
     const fixture = fx.calls.find((args) => args[0] === "run" && args.includes("-d"))!;
-    expect(fixture.join(" ")).not.toContain("type=bind");
-    expect(fixture).toEqual(expect.arrayContaining(["--network-alias", "m07-fixture"]));
+    expect(fixture).toEqual(expect.arrayContaining(["--network", "none"]));
+    const task = fx.calls.find((args) => args[0] === "run" && !args.includes("-d"))!;
+    expect(task).toEqual(expect.arrayContaining(["--network", "container:haios-m07-fixture-abc123"]));
+  });
+
+  it("forces --pull never on task and fixture Docker runs", async () => {
+    const fx = fakeDocker();
+    const sandbox = new SandboxExecutor({ docker: fx.executor, idFactory: () => "abc123" });
+    await sandbox.execute({ transactionId: "txn_test", execution: execution("S1"), worktreePath: "C:\\Workspace\\tx-worktree",
+      safeEnvironment: { CI: "1" }, fixtureProfileId: "m07-http-fixture-v1" });
+    for (const call of fx.calls.filter((args) => args[0] === "run")) {
+      expect(call).toEqual(expect.arrayContaining(["--pull", "never"]));
+    }
+  });
+
+  it("denies secret-like stdout before returning task output", async () => {
+    const secretLike = ["sk", "abcdefghijklmnopqrstuvwxyz123456"].join("-");
+    const fx = fakeDocker({ stdout: `OPENAI_API_KEY=${secretLike}` });
+    const sandbox = new SandboxExecutor({ docker: fx.executor, idFactory: () => "abc123" });
+    const result = await sandbox.execute({ transactionId: "txn_test", execution: execution("S0"),
+      worktreePath: "C:\\Workspace\\tx-worktree", safeEnvironment: { CI: "1" } });
+    expect(result).toMatchObject({ decision: "DENY", reason: "SANDBOX_SECRET_OUTPUT_DETECTED", stdout: "", stderr: "" });
   });
 
   it("exposes no generic Docker run/exec primitive on the class", () => {

@@ -113,3 +113,12 @@ describe("M07 typed task resolver", () => {
       .rejects.toThrow(/TASK_RESOLUTION_DENIED/);
   });
 });
+
+describe("M07 secret-sensitive relpath remediation", () => {
+  it.each(["api-secret.test.mjs", "credentials.json"])("rejects existing secret-sensitive file %s", async (name) => {
+    const root = await fixture();
+    await writeFile(join(root, name), "sensitive", "utf8");
+    await expect(resolveTaskExecution(bound(root), "node.test.run", { testPath: name, reporter: "spec" }, "a".repeat(64), root))
+      .rejects.toThrow(/TASK_RESOLUTION_DENIED:REL_PATH/);
+  });
+});

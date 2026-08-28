@@ -22,7 +22,7 @@ function boundPolicy() {
         "default-artifacts-v1": {
           allowedArtifactPatterns: ["dist/**", "coverage/**", "*.tsbuildinfo", "**/.cache/**"],
           protectedPatterns: [
-            "src/**", ".env*", "**/.env*", "**/*secret*", "**/*secret*/**",
+            "src/**", "**/.git/**", ".env*", "**/.env*", "**/*secret*", "**/*secret*/**",
             "**/*credential*", "**/*credential*/**",
           ],
         },
@@ -101,5 +101,36 @@ describe("M07 bounded task effect manifest", () => {
     const before = await captureTaskEffectManifest(root);
     expect(() => classifyTaskEffectDelta(before, before, boundPolicy(), "missing-policy"))
       .toThrow(/TASK_EFFECT_CLASSIFICATION_DENIED/);
+  });
+});
+
+describe("M07 effect inventory blind-spot remediation", () => {
+  it("captures a created empty directory", async () => {
+    const root = await fixture();
+    const before = await captureTaskEffectManifest(root);
+    await mkdir(join(root, "unexpected-empty"));
+    const after = await captureTaskEffectManifest(root);
+    expect(classifyTaskEffectDelta(before, after, boundPolicy(), "default-artifacts-v1"))
+      .toContainEqual(expect.objectContaining({ path: "unexpected-empty", operation: "CREATED", classification: "UNCLASSIFIED" }));
+  });
+  it("captures nested .git effects as protected instead of hiding them", async () => {
+    const root = await fixture();
+    const before = await captureTaskEffectManifest(root);
+    await mkdir(join(root, "dist", ".git"), { recursive: true });
+    await writeFile(join(root, "dist", ".git", "config"), "malicious", "utf8");
+    const after = await captureTaskEffectManifest(root);
+    expect(classifyTaskEffectDelta(before, after, boundPolicy(), "default-artifacts-v1"))
+      .toContainEqual(expect.objectContaining({ path: "dist/.git/config", classification: "PROTECTED" }));
+  });
+});
+
+describe("M07 empty-directory inventory bounds", () => {
+  it("counts empty directories against the entry ceiling", async () => {
+    const root = await mkdtemp("C:\\Workspace\\m07-effects-empty-");
+    roots.push(root);
+    await mkdir(join(root, "empty-a"));
+    await mkdir(join(root, "empty-b"));
+    await expect(captureTaskEffectManifest(root, { maxEntries: 1 }))
+      .rejects.toThrow(/TASK_EFFECT_MANIFEST_DENIED:ENTRY_COUNT/);
   });
 });

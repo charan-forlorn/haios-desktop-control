@@ -36,6 +36,16 @@ export interface SandboxExecutionResult {
 const OWNER = "m07";
 const FIXTURE_PROFILE = "m07-http-fixture-v1";
 const MAX_DOCKER_BUFFER = 2 * 1024 * 1024;
+const SECRET_OUTPUT_PATTERNS = Object.freeze([
+  /(?<![A-Za-z0-9])ghp_[A-Za-z0-9]{20,}/,
+  /(?<![A-Za-z0-9])github_pat_[A-Za-z0-9_]{20,}/,
+  /(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{20,}/,
+  /BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY/,
+  /\b(?:GITHUB_TOKEN|OPENAI_API_KEY|API_KEY|PASSWORD|SECRET|TOKEN)\s*[:=]\s*\S+/i,
+]);
+function containsSecretOutput(value: string): boolean {
+  return SECRET_OUTPUT_PATTERNS.some((pattern) => pattern.test(value));
+}
 
 const defaultDocker: DockerExecutor = (args, timeoutMs) => new Promise((resolve) => {
   execFile("docker", [...args], {
@@ -89,20 +99,6 @@ export class SandboxExecutor {
     return removed.exitCode === 0;
   }
 
-  async #ownedNetwork(name: string, transactionId: string): Promise<boolean> {
-    const result = await this.#docker([
-      "network", "inspect", "--format",
-      "{{ index .Labels \"haios.m07.owner\" }}|{{ index .Labels \"haios.m07.tx\" }}",
-      name,
-    ], 10_000);
-    return result.exitCode === 0 && result.stdout.trim() === `${OWNER}|${transactionId}`;
-  }
-  async #removeOwnedNetwork(name: string, transactionId: string): Promise<boolean> {
-    if (!(await this.#ownedNetwork(name, transactionId))) return false;
-    const removed = await this.#docker(["network", "rm", name], 15_000);
-    return removed.exitCode === 0;
-  }
-
   #securityArgs(transactionId: string, runId: string, worktreePath: string): string[] {
     return [
       "--label", `haios.m07.owner=${OWNER}`,
@@ -134,14 +130,14 @@ export class SandboxExecutor {
     }
     return result;
   }
-  async #startFixture(transactionId: string, runId: string, network: string, name: string): Promise<boolean> {
+  async #startFixture(transactionId: string, runId: string, name: string): Promise<boolean> {
     const fixtureCode = [
       "const http=require('http');",
-      "http.createServer((q,r)=>{r.end('M07_FIXTURE_OK')}).listen(8080,'0.0.0.0');",
+      "http.createServer((q,r)=>{r.end('M07_FIXTURE_OK')}).listen(8080,'127.0.0.1');",
       "setInterval(()=>{},1<<30);",
     ].join("");
     const args = [
-      "run", "-d", "--name", name,
+      "run", "-d", "--pull", "never", "--name", name,
       "--label", `haios.m07.owner=${OWNER}`,
       "--label", `haios.m07.tx=${transactionId}`,
       "--label", `haios.m07.run=${runId}`,
@@ -150,8 +146,7 @@ export class SandboxExecutor {
       "--security-opt", "no-new-privileges",
       "--memory", "256m", "--cpus", "0.5", "--pids-limit", "64",
       "--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=16777216",
-      "--network", network,
-      "--network-alias", "m07-fixture",
+      "--network", "none",
       "--entrypoint", "node",
       M07_NODE_TOOLCHAIN.image,
       "-e", fixtureCode,
@@ -181,47 +176,32 @@ export class SandboxExecutor {
     const runId = this.#idFactory();
     if (!/^[a-z0-9]{4,32}$/.test(runId)) return denied("SANDBOX_RUN_ID_DENIED");
     const taskName = `haios-m07-task-${runId}`;
-    const networkName = `haios-m07-net-${runId}`;
     const fixtureName = `haios-m07-fixture-${runId}`;
-    let networkCreated = false;
     let fixtureCreated = false;
 
     if (request.execution.sandboxProfile === "S1") {
-      const network = await this.#docker([
-        "network", "create", "--internal",
-        "--label", `haios.m07.owner=${OWNER}`,
-        "--label", `haios.m07.tx=${request.transactionId}`,
-        "--label", `haios.m07.run=${runId}`,
-        networkName,
-      ], 15_000);
-      if (network.exitCode !== 0 || network.timedOut) return denied("SANDBOX_NETWORK_CREATE_FAILED");
-      networkCreated = true;
-      fixtureCreated = await this.#startFixture(request.transactionId, runId, networkName, fixtureName);
-      if (!fixtureCreated) {
-        const cleaned = await this.#removeOwnedNetwork(networkName, request.transactionId);
-        return denied("SANDBOX_FIXTURE_START_FAILED", cleaned);
-      }
+      fixtureCreated = await this.#startFixture(request.transactionId, runId, fixtureName);
+      if (!fixtureCreated) return denied("SANDBOX_FIXTURE_START_FAILED");
     }
 
     const runArgs = [
-      "run", "--name", taskName,
+      "run", "--pull", "never", "--name", taskName,
       ...this.#securityArgs(request.transactionId, runId, request.worktreePath),
-      "--network", request.execution.sandboxProfile === "S0" ? "none" : networkName,
+      "--network", request.execution.sandboxProfile === "S0" ? "none" : `container:${fixtureName}`,
       ...envArgs,
       "--entrypoint", request.execution.executable,
       M07_NODE_TOOLCHAIN.image,
       ...request.execution.argv,
     ];
     const task = await this.#docker(runArgs, request.execution.timeoutMs);
-    const stdout = boundText(task.stdout, request.execution.stdoutMaxBytes);
-    const stderr = boundText(task.stderr, request.execution.stderrMaxBytes);
+    const secretOutput = containsSecretOutput(task.stdout) || containsSecretOutput(task.stderr);
+    const stdout = secretOutput ? { text: "", truncated: false } : boundText(task.stdout, request.execution.stdoutMaxBytes);
+    const stderr = secretOutput ? { text: "", truncated: false } : boundText(task.stderr, request.execution.stderrMaxBytes);
 
     const taskClean = await this.#removeOwnedContainer(taskName, request.transactionId);
     let fixtureClean = true;
-    let networkClean = true;
     if (fixtureCreated) fixtureClean = await this.#removeOwnedContainer(fixtureName, request.transactionId);
-    if (networkCreated) networkClean = await this.#removeOwnedNetwork(networkName, request.transactionId);
-    const cleanupVerified = taskClean && fixtureClean && networkClean;
+    const cleanupVerified = taskClean && fixtureClean;
     const base = {
       stdout: stdout.text,
       stderr: stderr.text,
@@ -231,6 +211,7 @@ export class SandboxExecutor {
       durationMs: Date.now() - startedAt,
     };
     if (!cleanupVerified) return { decision: "DENY", reason: "SANDBOX_CLEANUP_UNVERIFIED", ...base };
+    if (secretOutput) return { decision: "DENY", reason: "SANDBOX_SECRET_OUTPUT_DETECTED", ...base };
     if (task.timedOut) return { decision: "DENY", reason: "SANDBOX_TIMEOUT", ...base };
     if (task.exitCode !== 0) {
       return { decision: "DENY", reason: "SANDBOX_EXIT_NONZERO", exitCode: task.exitCode, ...base };

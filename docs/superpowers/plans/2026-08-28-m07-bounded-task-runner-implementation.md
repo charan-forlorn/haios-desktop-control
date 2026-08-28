@@ -17,7 +17,7 @@
 - No host execution of transaction-modified code.
 - No generic shell/command/cwd/env/executable authority.
 - S2 remains disabled.
-- No Docker socket, host credential mount, host network, or implicit image pull.
+- No Docker socket, host credential mount, host network, or implicit image pull; every Docker `run` must use `--pull never`.
 - Production sandbox image is pinned to `haios-operator-sandbox-node@sha256:4c1909633b4c7c6e8dfce3e7994bacaf81ac30808a055d4ba790e9b7c366dcfe`.
 - Qualification may use only disposable transaction-owned containers/networks and synthetic repositories.
 - Existing listeners 8768/8769 must remain unchanged and 8772 must end free.
@@ -83,7 +83,7 @@
 - Result includes exit code, stdout/stderr, truncation flags, duration, timeout/cleanup status, container/network identities.
 
 - [ ] Write RED tests for exact S0 Docker argv: `--network none`, non-root, read-only root, `--cap-drop ALL`, `no-new-privileges`, PID/memory/CPU limits, `/workspace` bind, nested read-only `.git` bind, bounded tmpfs, fixed workdir, static safe env only, no Docker socket/host secrets.
-- [ ] Write RED S1 tests proving generated `--internal` network, fixed synthetic fixture profile only, no arbitrary target, task/fixture containers on owned network, and cleanup of both containers + network.
+- [ ] Write RED S1 tests proving a fixed fixture container runs with `--network none`, the task shares only that fixture network namespace via `--network container:<fixture>`, no routable non-loopback interface/arbitrary target exists, and both owned containers are cleaned.
 - [ ] Prove no `pull`, host network, privileged mode, socket mount, generic shell, or caller-supplied Docker args are reachable.
 - [ ] Implement deterministic owned resource names/labels and timeout cleanup; failure to prove cleanup returns fail-closed result.
 - [ ] Run focused sandbox tests, typecheck, build; require PASS.
@@ -124,7 +124,7 @@
 - [ ] On committed bytes, run exactly one final broad regression, typecheck, and build.
 - [ ] Freeze ordinal/lowercase SHA-256 tracked-source manifest and verify post-live equality.
 - [ ] Run live S0 in a disposable synthetic Git worktree; execute modified JavaScript in Docker, prove network none/non-root/no socket/canonical unchanged, and classify one bounded artifact.
-- [ ] Run live S1 with one generated Docker `--internal` network and fixed synthetic fixture container; prove fixture reachable and unrelated external/host authority unavailable.
+- [ ] Run live S1 with one fixed synthetic fixture container on `--network none` and the task sharing only its network namespace; prove loopback fixture reachable while raw gateway, Internet, host service, and non-loopback interface authority are unavailable.
 - [ ] Verify all M07 containers/networks are removed, Docker residue is zero, ports 8768/8769 integrity unchanged, and 8772 free.
 - [ ] Produce qualification result + independent-review handoff bound to exact HEAD and manifest.
 - [ ] Stop at `HAIOS_DESKTOP_CONTROL_PLANE_R1_M07_READY_FOR_INDEPENDENT_VERIFICATION`.

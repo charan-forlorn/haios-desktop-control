@@ -4,7 +4,7 @@ import { join, relative, win32 } from "node:path";
 
 import type { BoundTaskEffectPolicy } from "./task-effects.js";
 
-export type TaskEffectEntryType = "file" | "symlink";
+export type TaskEffectEntryType = "file" | "symlink" | "directory";
 export interface TaskEffectManifestEntry {
   readonly path: string;
   readonly type: TaskEffectEntryType;
@@ -56,18 +56,23 @@ export async function captureTaskEffectManifest(
   const entries: TaskEffectManifestEntry[] = [];
   let totalBytes = 0;
 
-  async function walk(directory: string): Promise<void> {
+  async function walk(directory: string, rootLevel = false): Promise<void> {
     const children = await readdir(directory, { withFileTypes: true });
     children.sort((a, b) => a.name.localeCompare(b.name, "en"));
     for (const child of children) {
-      if (child.name === ".git") continue;
+      if (rootLevel && child.name === ".git") continue;
       const absolute = join(directory, child.name);
       const rel = posixRelative(rootReal, absolute);
       if (rel.startsWith("../") || rel === "..") deny("PATH_ESCAPE");      const stat = await lstat(absolute);
       if (stat.isSymbolicLink()) {
         entries.push(Object.freeze({ path: rel, type: "symlink", size: stat.size, sha256: "" }));
       } else if (stat.isDirectory()) {
+        const beforeEntries = entries.length;
         await walk(absolute);
+        if (entries.length === beforeEntries) {
+          entries.push(Object.freeze({ path: rel, type: "directory", size: 0, sha256: "" }));
+        }
+        if (entries.length > maxEntries) deny("ENTRY_COUNT");
         continue;
       } else if (stat.isFile()) {
         if (stat.size > maxFileBytes) deny("FILE_BYTES");
@@ -82,7 +87,7 @@ export async function captureTaskEffectManifest(
       if (entries.length > maxEntries) deny("ENTRY_COUNT");
     }
   }
-  await walk(rootReal);
+  await walk(rootReal, true);
   entries.sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
   return Object.freeze({ root: rootReal, entries: Object.freeze(entries), totalBytes });
 }

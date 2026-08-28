@@ -41,7 +41,8 @@ function normalizeRelPath(value: unknown): string {
   if (segments.some((segment) => {
     const lower = segment.toLowerCase();
     return lower === ".git" || lower === ".env" || lower.startsWith(".env.")
-      || lower === "secrets" || lower === "credentials" || lower.endsWith(".pem") || lower.endsWith(".key");
+      || lower.includes("secret") || lower.includes("credential")
+      || lower.endsWith(".pem") || lower.endsWith(".key");
   })) deny("REL_PATH");
   return win32.normalize(segments.join("\\"));
 }

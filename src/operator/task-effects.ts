@@ -31,6 +31,7 @@ const ALLOWED_ARTIFACT_PATTERNS = new Set([
 ]);
 const REQUIRED_PROTECTED_PATTERNS = [
   "src/**",
+  "**/.git/**",
   ".env*",
   "**/.env*",
   "**/*secret*",

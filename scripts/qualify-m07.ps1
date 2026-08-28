@@ -124,9 +124,13 @@ if (@($Live.productionTasks).Count -ne 4) { throw "M07_PRODUCTION_TASK_COUNT_FAI
 if (-not $Live.s0NetworkDenied -or -not $Live.modifiedCodeExecuted) { throw "M07_S0_PROOF_FAILED" }
 if ($Live.effectClassification -ne "ALLOWED_ARTIFACT") { throw "M07_EFFECT_CLASSIFICATION_FAILED" }
 if (-not $Live.s1FixtureOnly) { throw "M07_S1_PROOF_FAILED" }
+if (-not $Live.s1NamespaceIsolated) { throw "M07_S1_NAMESPACE_ISOLATION_FAILED" }
+if (-not $Live.secretOutputDenied) { throw "M07_SECRET_OUTPUT_DENIAL_FAILED" }
 if (-not $Live.canonicalUnchanged -or -not $Live.rollbackClean) { throw "M07_ISOLATION_CLEANUP_FAILED" }
 Write-Host "M07_S0_PRODUCTION_TASKS=PASS"
 Write-Host "M07_S1_FIXTURE_ONLY=PASS"
+Write-Host "M07_S1_NAMESPACE_ISOLATION=PASS"
+Write-Host "M07_SECRET_OUTPUT_DENIAL=PASS"
 Write-Host "M07_EFFECT_CLASSIFICATION=PASS"
 
 $ContainerResidue = @(Get-M07ContainerResidue)
@@ -196,6 +200,8 @@ $Result = [ordered]@{
     build = "PASS"
     live_s0_production_tasks = "PASS"
     live_s1_fixture_only = "PASS"
+    live_s1_namespace_isolation = "PASS"
+    live_secret_output_denial = "PASS"
     live_effect_classification = "PASS"
     canonical_unchanged = $true
     docker_container_residue = 0
@@ -228,7 +234,8 @@ $Handoff = [ordered]@{
         "NO_HOST_MUTABLE_CODE_EXECUTION","S0_NETWORK_NONE","S1_FIXTURE_ONLY",
         "NO_DOCKER_SOCKET_OR_HOST_NETWORK","PINNED_IMAGE_IDENTITY","ENTRYPOINT_SHELL_BYPASS",
         "TRANSACTION_WORKTREE_ONLY","CANONICAL_UNCHANGED","TASK_EFFECT_CLASSIFICATION",
-        "OWNED_RESOURCE_CLEANUP","S2_DISABLED","TUNNEL_INTEGRITY","SECRETS_PERSISTED_FALSE"
+        "OWNED_RESOURCE_CLEANUP","S2_DISABLED","TUNNEL_INTEGRITY","SECRETS_PERSISTED_FALSE",
+        "SECRET_OUTPUT_FAIL_CLOSED"
     )
     allowed_verdicts = @("PASS","BLOCKED")
 }

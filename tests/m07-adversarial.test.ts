@@ -44,7 +44,8 @@ describe("M07 adversarial authority boundaries", () => {
     expect(source).not.toContain('"--privileged"');
     expect(source).not.toContain('"host"');
     expect(source).not.toContain("docker.sock");
-    expect(source).toContain('"--network-alias", "m07-fixture"');
+    expect(source).toContain('"--network", "none"');
+    expect(source).toContain('`container:${fixtureName}`');
   });
 
   it("uses execFile Docker invocation and overrides the image shell entrypoint", async () => {
@@ -78,6 +79,8 @@ describe("M07 adversarial authority boundaries", () => {
       "SOURCE_MANIFEST_DIGEST",
       "M07_S0_PRODUCTION_TASKS=PASS",
       "M07_S1_FIXTURE_ONLY=PASS",
+      "M07_S1_NAMESPACE_ISOLATION=PASS",
+      "M07_SECRET_OUTPUT_DENIAL=PASS",
       "M07_EFFECT_CLASSIFICATION=PASS",
       "OPERATOR13_STILL_INACTIVE=PASS",
       "DOCKER_RESIDUE=0",
@@ -95,5 +98,18 @@ describe("M07 adversarial authority boundaries", () => {
     expect(helper).toContain('worktreeBuildBytes = await readFile(join(worktreePath, "scripts/build.mjs"))');
     expect(helper).toContain('sha256(worktreeBuildBytes)');
     expect(helper).not.toContain('sha256(baselineBuild)');
+  });
+});
+
+describe("M07 independent-review remediation contract", () => {
+  it("forces local-only image use and namespace-isolated S1 networking", async () => {
+    const source = await read("src/operator/sandbox-executor.ts");
+    expect(source).toContain('"--pull", "never"');
+    expect(source).toContain('`container:${fixtureName}`');
+    expect(source).not.toContain('"network", "create", "--internal"');
+  });
+  it("protects nested .git descendants in the production effect policy", async () => {
+    const policy = JSON.parse(await read("task-effects.m07.json"));
+    expect(policy.policies["default-artifacts-v1"].protectedPatterns).toContain("**/.git/**");
   });
 });

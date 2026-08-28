@@ -121,10 +121,10 @@ S0 uses a pinned Node toolchain image with:
 - bounded memory, CPU, PIDs, timeout, stdout, and stderr.
 
 ### S1 — LOCAL_FIXTURE
-S1 inherits all S0 restrictions except network mode.
-It receives one transaction-owned Docker `--internal` network and may reach only explicitly declared synthetic fixture containers on that network.
-It receives no general Internet, no host network mode, no arbitrary host/port input, and no Docker socket.
-Fixture containers and network resources are transaction-owned, labeled, bounded, and removed after the task.
+S1 inherits all S0 restrictions except that it shares the network namespace of one fixed synthetic fixture container.
+The fixture container itself runs with `--network none` and listens only on `127.0.0.1:8080`; the task container runs with `--network container:<fixture>`.
+This creates no bridge, gateway, routable non-loopback interface, Internet path, host-network path, arbitrary host/port input, or Docker-socket authority.
+Fixture and task containers are transaction-owned, labeled, bounded, and removed after the task.
 
 ### S2 — HOST_SERVICE_RESTRICTED
 S2 remains `DISABLED` and every M07 attempt to select it returns deterministic denial.
@@ -143,7 +143,7 @@ The initial qualified artifact policy may classify only bounded known outputs su
 - `dist/**`;
 - `*.tsbuildinfo`.
 
-Before task execution, M07 captures a bounded Transaction Effect Manifest of the worktree.
+Before task execution, M07 captures a bounded Transaction Effect Manifest of the worktree, including empty-directory effects and nested `.git` descendants while excluding only the transaction root `.git` control metadata.
 After execution it computes the exact delta and classifies every effect.
 Classification semantics are:
 - declared qualified ephemeral/build artifact → tolerated and recorded;
@@ -176,11 +176,12 @@ Result metadata includes at minimum:
 - canonical pre/post HEAD and state-digest comparison;
 - owned-resource cleanup status.
 
-Secret values are never included in task result metadata or logs.
-Non-zero exit, timeout, crash, sandbox setup failure, effect-policy violation, currentness mismatch, or cleanup uncertainty returns DENY/failure rather than ALLOW.
+Secret values are never included in task result metadata or logs. Raw stdout/stderr is checked for fixed high-risk secret patterns before result exposure; a match returns deterministic DENY with blank stdout/stderr.
+Non-zero exit, timeout, crash, sandbox setup failure, effect-policy violation, currentness mismatch, secret-like output, or cleanup uncertainty returns DENY/failure rather than ALLOW.
 
 ## 12. Dependency Provisioning Boundary
 M07 does not gain package-download or Internet authority in order to make a task pass.
+Every M07 Docker `run` uses `--pull never`, so a missing sandbox image fails locally rather than creating implicit image-download authority.
 It does not automatically run `npm install`, `npm ci`, pip install, package-manager login, or any network dependency hydration.
 It does not mount the host Docker socket or secret-bearing package-manager configuration into the sandbox.
 
@@ -213,7 +214,7 @@ The committed M07 candidate must prove all of the following before independent r
 4. typed relpath/enum expansion produces argv elements with no shell parsing;
 5. registry and effect-policy SHA-256 currentness mismatch fails closed;
 6. S0 has no network, host service access, host secrets, Docker socket, or out-of-workspace/scratch writes;
-7. S1 reaches only transaction-owned synthetic fixture services and has no Internet/host network/Docker socket;
+7. S1 reaches only the fixed loopback synthetic fixture through a shared `--network none` fixture namespace and has no bridge/gateway/Internet/host network/Docker socket;
 8. timeout/crash cleanup removes only transaction-owned sandbox resources;
 9. stdout/stderr bounds and non-zero exit semantics are deterministic;
 10. declared artifacts classify as tolerated while unclassified, tracked-source, protected, and secret effects fail at their required severities;

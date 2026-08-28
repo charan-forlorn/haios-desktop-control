@@ -56,6 +56,7 @@ function validEffectPolicy() {
         allowedArtifactPatterns: ["dist/**", "coverage/**", "*.tsbuildinfo"],
         protectedPatterns: [
           "src/**",
+          "**/.git/**",
           ".env*",
           "**/.env*",
           "**/*secret*",

@@ -49,6 +49,8 @@ await writeFile(join(canonical, "tests/sample.test.mjs"), s0Probe, "utf8");
 await writeFile(join(canonical, "scripts/build.mjs"), baselineBuild, "utf8");
 await writeFile(join(canonical, "scripts/typecheck.mjs"), 'console.log("M07_SYNTHETIC_TYPECHECK_PASS");\n', "utf8");
 await writeFile(join(canonical, "scripts/s1-client.mjs"), s1Client, "utf8");
+const syntheticSecret = ["sk", "abcdefghijklmnopqrstuvwxyz123456"].join("-");
+await writeFile(join(canonical, "scripts/secret-output.mjs"), `console.log("OPENAI_API_KEY=${syntheticSecret}");\n`, "utf8");
 await gitRaw("init", "-b", "main");
 await gitRaw("add", "-A");
 await gitRaw("-c", "user.email=haios-qual@local", "-c", "user.name=HAIOS Qualifier", "commit", "-m", "baseline");
@@ -136,6 +138,25 @@ const s1 = await s1Runner.run({
 if (s1.decision !== "ALLOW" || !s1.stdout.includes("M07_S1_FIXTURE_ONLY_PASS")) {
   throw new Error(`S1:${JSON.stringify(s1)}`);
 }
+const secretRaw = {
+  registryId: "m07-synthetic-secret", version: "2.0.0", tasks: {
+    "secret.probe": {
+      argvTemplate: ["node", "scripts/secret-output.mjs"], paramSchemas: {}, requiredParams: [],
+      toolchainProfile: "node22-sandbox-v1", sandboxProfile: "S0", networkAuthority: "NONE",
+      childProcessPolicy: "SANDBOX_OWNED_TREE", envAllowlist: ["CI"], effectPolicyRef: "default-artifacts-v1",
+      timeoutMs: 30000, stdoutMaxBytes: 65536, stderrMaxBytes: 65536,
+    },
+  },
+};
+const secretBytes = Buffer.from(JSON.stringify(secretRaw), "utf8");
+const secretRegistry = Object.freeze({ registry: validateTaskRegistryV2(secretRaw),
+  sha256: createHash("sha256").update(secretBytes).digest("hex"), sourcePath: "synthetic:m07-secret" });
+const secretRunner = new OperatorTaskRunner({ transactions: service, git, registry: secretRegistry, effects,
+  qualifiedEffectPolicySha256: effects.sha256, sandbox, safeEnvironment: { CI: "1" } });
+const secretProbe = await secretRunner.run({ txId, taskId: "secret.probe", params: {}, expectedRegistrySha256: secretRegistry.sha256 });
+if (secretProbe.decision !== "DENY" || secretProbe.reason !== "TASK_SANDBOX_FAILED" || JSON.stringify(secretProbe).includes(syntheticSecret)) {
+  throw new Error(`SECRET_OUTPUT:${JSON.stringify(secretProbe)}`);
+}
 if ((await git.head(canonical)) !== baselineHead || (await git.status(canonical)) !== "") {
   throw new Error("CANONICAL_CHANGED_AFTER_TASKS");
 }
@@ -150,6 +171,8 @@ const result = {
   modifiedCodeExecuted: true,
   effectClassification: buildArtifact.classification,
   s1FixtureOnly: true,
+  s1NamespaceIsolated: true,
+  secretOutputDenied: true,
   canonicalUnchanged: true,
   rollbackClean: true,
 };
