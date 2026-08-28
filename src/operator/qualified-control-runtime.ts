@@ -7,6 +7,8 @@ import { OperatorTransactionService } from "./transaction-isolation.js";
 import {
   createOperatorControlRuntime,
   type OperatorControlRuntime,
+  type OperatorControlTaskApi,
+  type OperatorControlTransactionApi,
 } from "./control-runtime.js";
 
 export const M08_QUALIFIED_RUNTIME_IDENTITY = Object.freeze({
@@ -29,6 +31,29 @@ export interface QualifiedOperatorControlRuntime extends OperatorControlRuntime 
 
 const QUALIFIED_RUNTIMES = new WeakSet<object>();
 
+function freezeBound<T extends (...args: any[]) => any>(owner: object, fn: T): T {
+  return Object.freeze(fn.bind(owner)) as T;
+}
+
+function transactionFacade(service: OperatorTransactionService): OperatorControlTransactionApi {
+  return Object.freeze({
+    begin: freezeBound(service, service.begin),
+    stagePatch: freezeBound(service, service.stagePatch),
+    stageCreate: freezeBound(service, service.stageCreate),
+    stageMove: freezeBound(service, service.stageMove),
+    stageRemove: freezeBound(service, service.stageRemove),
+    validate: freezeBound(service, service.validate),
+    apply: freezeBound(service, service.apply),
+    rollback: freezeBound(service, service.rollback),
+    checkpoint: freezeBound(service, service.checkpoint),
+    promote: freezeBound(service, service.promote),
+    status: freezeBound(service, service.status),
+  });
+}
+
+function taskFacade(runner: OperatorTaskRunner): OperatorControlTaskApi {
+  return Object.freeze({ run: freezeBound(runner, runner.run) });
+}
 export async function createQualifiedOperatorControlRuntime(
   config: QualifiedOperatorControlRuntimeConfig,
 ): Promise<QualifiedOperatorControlRuntime> {
@@ -57,7 +82,12 @@ export async function createQualifiedOperatorControlRuntime(
     sandbox,
     safeEnvironment: Object.freeze({ CI: "1" }),
   });
-  const base = createOperatorControlRuntime({ transactions, tasks, registry, effects });
+  const base = createOperatorControlRuntime({
+    transactions: transactionFacade(transactions),
+    tasks: taskFacade(tasks),
+    registry,
+    effects,
+  });
   const runtime: QualifiedOperatorControlRuntime = Object.freeze({
     ...base,
     attestation: M08_QUALIFIED_RUNTIME_IDENTITY,

@@ -65,7 +65,7 @@ Write-Host "M08_RUN_ID=$RunId"; Write-Host "HEAD=$Head"; Write-Host "BRANCH=$Bra
 Write-Host "[1] M08 focused + adversarial qualification"
 $AdversarialLog=Join-Path $EvidenceRoot "m08-adversarial.log"
 & npm.cmd test -- tests/m08-adversarial.test.ts tests/m08-runtime-provenance.test.ts tests/m08-live-helper.test.ts tests/m08-operator-runtime.test.ts tests/m08-operator-server.test.ts tests/m05-operator-server.test.ts tests/m06-adversarial.test.ts tests/m07-adversarial.test.ts 2>&1 | Tee-Object -FilePath $AdversarialLog
-Require-Exit "M08_ADVERSARIAL_TESTS"; Write-Host "M08_ADVERSARIAL_TESTS=PASS"
+Require-Exit "M08_ADVERSARIAL_TESTS"; Write-Host "M08_ADVERSARIAL_TESTS=PASS"; Write-Host "M08_POST_BRAND_PROVENANCE_IMMUTABILITY=PASS"
 
 Write-Host "[2] One final full regression on frozen committed bytes"
 $FullTestLog=Join-Path $EvidenceRoot "full-tests.log"
@@ -113,14 +113,14 @@ $Result=[ordered]@{
   docker_image=$Image; docker_image_id=$ImageInspect.Id; adversarial_tests="PASS"; full_tests="PASS"; full_test_passing_count=$FullTestPassingCount; typecheck="PASS"; build="PASS"
   live_exact_13_tools=$true; live_active_status=$true; live_task=$true; live_promotion=$true; live_rollback=$true; live_stale_cas_denial=$true; canonical_unchanged_before_promotion=$true
   worktree_residue=0; docker_container_residue=0; docker_network_residue=0; runtime_residue=0; unauthorized_mutations=0; secrets_persisted=$false
-  tunnel_integrity=@($TunnelEvidence); tunnel_modified=$false; long_lived_operator_mode="READ_ONLY_EMERGENCY"; disposable_active_operator_qualified=$true; qualified_runtime_provenance=$true; qualified_runtime_profile=$QualifiedRuntimeProfile; production_operator_runtime_changed=$false
+  tunnel_integrity=@($TunnelEvidence); tunnel_modified=$false; long_lived_operator_mode="READ_ONLY_EMERGENCY"; disposable_active_operator_qualified=$true; qualified_runtime_provenance=$true; post_brand_provenance_immutable=$true; qualified_runtime_profile=$QualifiedRuntimeProfile; production_operator_runtime_changed=$false
   s2_enabled=$false; destructive_capability="LOCKED"; production_dogfood_activated=$false; independent_verification="PENDING"
   terminal="HAIOS_DESKTOP_CONTROL_PLANE_R1_M08_READY_FOR_INDEPENDENT_VERIFICATION"
 }
 $ResultPath=Join-Path $EvidenceRoot "m08-qualification-result.json"; [IO.File]::WriteAllText($ResultPath, (($Result | ConvertTo-Json -Depth 10) + "`n"), [Text.UTF8Encoding]::new($false))
 $Handoff=[ordered]@{
   mission=$Result.mission; run_id=$RunId; head=$Head; source_manifest_digest=$ManifestDigest; review_mode="READ_ONLY_INDEPENDENT"; rerun_unchanged_tests=$false
-  required_checks=@("HEAD_MATCH","MANIFEST_MATCH","M07_CERTIFICATION_BOUND","EXACT_13_TOOL_SURFACE","EXPLICIT_ACTIVE_RUNTIME_GATE","RUNTIME_PROVENANCE_AND_IDENTITY_BINDING","INACTIVE_MODE_UNCHANGED","LEGACY27_UNCHANGED","SERVER_BOUND_REGISTRY_DIGEST","M06_TRANSACTION_ISOLATION","M07_TASK_RUNNER_BINDING","PUBLIC_INPUT_EXACT_KEYS","NO_GENERIC_EXEC_AUTHORITY","NO_REMOTE_GIT_AUTHORITY","S2_DISABLED","DESTRUCTIVE_LOCKED","CANONICAL_UNCHANGED_BEFORE_PROMOTION","LOCAL_CHECKPOINT_ONLY","CAS_PROMOTION","ROLLBACK_CLEANUP","STALE_CAS_FAIL_CLOSED","TASK_FAILURE_FAIL_CLOSED","EFFECT_POLICY_FAIL_CLOSED","TUNNEL_INTEGRITY","LONG_LIVED_RUNTIME_UNCHANGED","ZERO_RESIDUE","SECRETS_PERSISTED_FALSE","DOGFOOD_NOT_ACTIVATED")
+  required_checks=@("HEAD_MATCH","MANIFEST_MATCH","M07_CERTIFICATION_BOUND","EXACT_13_TOOL_SURFACE","EXPLICIT_ACTIVE_RUNTIME_GATE","RUNTIME_PROVENANCE_AND_IDENTITY_BINDING","POST_BRAND_PROVENANCE_IMMUTABILITY","INACTIVE_MODE_UNCHANGED","LEGACY27_UNCHANGED","SERVER_BOUND_REGISTRY_DIGEST","M06_TRANSACTION_ISOLATION","M07_TASK_RUNNER_BINDING","PUBLIC_INPUT_EXACT_KEYS","NO_GENERIC_EXEC_AUTHORITY","NO_REMOTE_GIT_AUTHORITY","S2_DISABLED","DESTRUCTIVE_LOCKED","CANONICAL_UNCHANGED_BEFORE_PROMOTION","LOCAL_CHECKPOINT_ONLY","CAS_PROMOTION","ROLLBACK_CLEANUP","STALE_CAS_FAIL_CLOSED","TASK_FAILURE_FAIL_CLOSED","EFFECT_POLICY_FAIL_CLOSED","TUNNEL_INTEGRITY","LONG_LIVED_RUNTIME_UNCHANGED","ZERO_RESIDUE","SECRETS_PERSISTED_FALSE","DOGFOOD_NOT_ACTIVATED")
   allowed_verdicts=@("PASS","BLOCKED")
 }
 $HandoffPath=Join-Path $EvidenceRoot "independent-review-handoff.json"; [IO.File]::WriteAllText($HandoffPath, (($Handoff | ConvertTo-Json -Depth 6) + "`n"), [Text.UTF8Encoding]::new($false))

@@ -167,3 +167,12 @@ M08 therefore adds a separate qualified-runtime factory and fail-closed server b
 The factory loads the task registry and effect policy from bytes itself and requires the exact M08-qualified identities `e94aaa6e60534316736a958c80bd33db691b2494b1518391a15d9f90f1e7e72c` and `00dfb27757d629e09bf2f91c4247004ecd1162bdd7e14faee88c1a777b2e5335`. It brands the resulting frozen runtime in a module-private `WeakSet`. ACTIVE server creation rejects any merely structural or forged runtime with `M08_ACTIVE_RUNTIME_UNQUALIFIED`.
 
 This remediation does not alter M06/M07 primitive logic, public tool names, S2, DESTRUCTIVE state, long-lived Operator state, or production/dogfood activation boundaries.
+
+## 14. Independent-Review Remediation R2 — Post-Brand Immutability
+The second independent review found that a valid brand could be bypassed after server creation by replacing `config.operatorRuntime`, or by shadowing methods on the exposed transaction/task service instances.
+
+M08 therefore captures the branded runtime into a server-local `activeOperatorRuntime` immediately after validation and uses only that binding for tool projection and dispatch. Later mutation of the caller-owned config object cannot redirect ACTIVE calls.
+
+The qualified factory no longer exposes the concrete M06/M07 service instances. It exposes frozen facades containing frozen bound functions captured from the internally constructed services. The concrete `OperatorTransactionService` and `OperatorTaskRunner` remain reachable only through those bound closures, so callers cannot replace or shadow their methods after branding.
+
+This remediation preserves the exact registry/effect objects, M06/M07 primitive behavior, public 13-tool schema, S2-disabled state, DESTRUCTIVE lock, long-lived `READ_ONLY_EMERGENCY` state, and no-dogfood boundary.

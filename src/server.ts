@@ -205,13 +205,14 @@ export async function createGatewayServer(
   if (operatorMode === "ACTIVE" && config.operatorTaskRegistryPath !== undefined) {
     throw new Error("M08_ACTIVE_FOUNDATION_REGISTRY_PATH_DENIED");
   }
+  const activeOperatorRuntime = operatorMode === "ACTIVE" ? config.operatorRuntime : undefined;
   const operatorFoundation = protocolMode === "operator13" && operatorMode !== "ACTIVE"
     ? await createOperatorFoundation(config.operatorTaskRegistryPath)
     : undefined;
   const operatorTools = protocolMode !== "operator13"
     ? undefined
     : operatorMode === "ACTIVE"
-      ? createOperatorToolDefinitions(Object.keys(config.operatorRuntime!.registry.registry.tasks))
+      ? createOperatorToolDefinitions(Object.keys(activeOperatorRuntime!.registry.registry.tasks))
       : operatorFoundation!.tools;
   const auditSink = config.auditSink ?? NOOP_AUDIT_SINK;
   const mutationUpstream = protocolMode === "legacy27" && isMutationClient(config.upstream)
@@ -249,7 +250,7 @@ export async function createGatewayServer(
         const operatorDispatch = protocolMode !== "operator13"
           ? undefined
           : operatorMode === "ACTIVE"
-            ? await dispatchOperatorControlTool(name, args, config.operatorRuntime!)
+            ? await dispatchOperatorControlTool(name, args, activeOperatorRuntime!)
             : dispatchOperatorFoundationTool(name, operatorFoundation!);
         if (operatorDispatch !== undefined) capabilityClass = operatorDispatch.capabilityClass;
         const result = operatorDispatch?.result ??

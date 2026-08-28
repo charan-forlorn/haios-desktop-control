@@ -320,3 +320,14 @@ The first fresh M08 review returned one blocker: ACTIVE accepted an unbranded st
 - [x] Require `isQualifiedOperatorControlRuntime()` at the ACTIVE server boundary.
 - [x] Route the disposable live helper through `createQualifiedOperatorControlRuntime()`.
 - [ ] Commit remediation bytes, run fresh deterministic qualification, and request a new exact-byte independent review.
+
+## Independent Review Remediation R2
+
+The second fresh review found post-brand mutability: the server retained the caller-owned config object and the branded runtime exposed mutable service instances.
+
+- [x] Add RED tests proving config replacement after server creation can no longer redirect ACTIVE dispatch.
+- [x] Add RED tests requiring frozen transaction/task facades and frozen bound functions.
+- [x] Capture the branded runtime in a server-local immutable binding before handler construction.
+- [x] Hide concrete M06/M07 service instances behind frozen bound-function facades.
+- [x] Add `M08_POST_BRAND_PROVENANCE_IMMUTABILITY` to qualification and independent-review handoff.
+- [ ] Freeze remediation R2 commit, run one fresh deterministic qualification, and request exact-byte independent review R3.

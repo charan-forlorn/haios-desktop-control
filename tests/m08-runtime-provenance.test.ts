@@ -100,3 +100,49 @@ describe("M08 qualified runtime provenance", () => {
     })).rejects.toThrow("M08_QUALIFIED_EFFECT_POLICY_IDENTITY_MISMATCH");
   });
 });
+
+describe("M08 post-brand provenance immutability", () => {
+  it("exposes only frozen transaction/task facades after branding", async () => {
+    const runtime = await qualified();
+    const begin = runtime.transactions.begin;
+    const run = runtime.tasks.run;
+    expect(Object.isFrozen(runtime.transactions)).toBe(true);
+    expect(Object.isFrozen(runtime.tasks)).toBe(true);
+    expect(Object.isFrozen(begin)).toBe(true);
+    expect(Object.isFrozen(run)).toBe(true);
+    expect(Reflect.set(runtime.transactions as object, "begin", async () => ({ decision: "ALLOW" }))).toBe(false);
+    expect(Reflect.set(runtime.tasks as object, "run", async () => ({ decision: "ALLOW" }))).toBe(false);
+    expect(runtime.transactions.begin).toBe(begin);
+    expect(runtime.tasks.run).toBe(run);
+  });
+
+  it("captures the branded runtime before caller config replacement", async () => {
+    const runtime = await qualified();
+    const fake = await structuralFake();
+    const config: any = {
+      apiKey: "m08-key", upstream: fakeUpstream(), protocolMode: "operator13",
+      operatorMode: "ACTIVE", operatorRuntime: runtime, port: 0,
+    };
+    const gateway = await createGatewayServer(config);
+    config.operatorRuntime = fake;
+    const address = await gateway.listen();
+    const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
+    const { StreamableHTTPClientTransport } = await import("@modelcontextprotocol/sdk/client/streamableHttp.js");
+    const client = new Client({ name: "m08-provenance", version: "1.0.0" });
+    try {
+      await client.connect(new StreamableHTTPClientTransport(new URL(address.url), {
+        requestInit: { headers: { "X-API-Key": "m08-key" } },
+      }));
+      const response = await client.callTool({
+        name: "operator_begin_transaction",
+        arguments: { projectId: "forbidden", canonicalRoot: "C:\\forbidden" },
+      });
+      const text = (response.content as Array<{ type: string; text?: string }>)
+        .filter((item) => item.type === "text").map((item) => item.text ?? "").join("\n");
+      expect(JSON.parse(text)).toMatchObject({ decision: "DENY", reason: "PROJECT_NOT_ALLOWED" });
+    } finally {
+      await client.close().catch(() => undefined);
+      await gateway.close().catch(() => undefined);
+    }
+  });
+});
