@@ -1,5 +1,6 @@
 param(
   [Parameter(Mandatory=$true)][string]$DecisionEnvelope,
+  [Parameter(Mandatory=$true)][string]$HumanDecision,
   [Parameter(Mandatory=$true)][string]$EvidenceRoot
 )
 $ErrorActionPreference = "Stop"
@@ -59,7 +60,8 @@ function AuthorityFail([string]$Why){throw "M10_CUTOVER_AUTHORITY_CURRENTNESS_FA
 
 if($Environment -notin @("SYNTHETIC","PRODUCTION")){AuthorityFail "ENVIRONMENT_INVALID"}
 $expectedDecision=if($Environment -eq "SYNTHETIC"){$SyntheticDecision}else{$ExactDecision}
-if([string]$Envelope.human_decision -ne $expectedDecision){AuthorityFail "DECISION_MISMATCH"}
+if([string]$Envelope.required_human_decision -ne $expectedDecision){AuthorityFail "REQUIRED_DECISION_MISMATCH"}
+if($HumanDecision -ne $expectedDecision){AuthorityFail "HUMAN_DECISION_MISMATCH"}
 if((Get-Sha256 $PSCommandPath) -ne [string]$Envelope.executor_sha256){AuthorityFail "EXECUTOR_HASH_DRIFT"}
 if((Get-Sha256 $RollbackScript) -ne [string]$Envelope.rollback_sha256){AuthorityFail "ROLLBACK_HASH_DRIFT"}
 
@@ -86,6 +88,7 @@ if($Environment -eq "SYNTHETIC"){
 }
 
 Write-Journal "M10_JOURNAL_READY" @{environment=$Environment}
+Write-Journal "M10_HUMAN_AUTHORITY_ACCEPTED" @{decision_matched=$true}
 try{
   Write-Journal "M10_MUTATION_BEGIN"
   $mutationStarted=$true

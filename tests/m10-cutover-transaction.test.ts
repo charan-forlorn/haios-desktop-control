@@ -53,6 +53,18 @@ describe("M10 sealed cutover transaction contract", () => {
     expect(firstMutation).toBeGreaterThan(gate);
   });
 
+  it("requires live Human decision input instead of pre-populating approval in the envelope", async () => {
+    const execute = await readFile(executePath, "utf8");
+    const rollback = await readFile(rollbackPath, "utf8");
+    const executeParams = execute.match(/^param\([\s\S]*?\)\r?\n/u)?.[0] ?? "";
+    expect(executeParams).toContain("$HumanDecision");
+    expect(execute).toContain("required_human_decision");
+    expect(execute).toContain("M10_HUMAN_AUTHORITY_ACCEPTED");
+    expect(execute).not.toContain("Envelope.human_decision");
+    expect(rollback).toContain("M10_HUMAN_AUTHORITY_ACCEPTED");
+    expect(rollback).not.toContain("Envelope.human_decision");
+  });
+
   it("creates the journal before mutation and preserves exact forward ordering", async () => {
     const source = await readFile(executePath, "utf8");
     const journal = source.indexOf("M10_JOURNAL_READY");

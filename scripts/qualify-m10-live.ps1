@@ -43,7 +43,9 @@ $DecisionEnvelope=[IO.Path]::GetFullPath($DecisionEnvelope);$EvidenceRoot=[IO.Pa
 if(-not(Test-Path -LiteralPath $DecisionEnvelope)){throw "M10_LIVE_DECISION_MISSING"}
 New-Item -ItemType Directory -Force -Path $EvidenceRoot|Out-Null
 $Envelope=Get-Content -Raw -LiteralPath $DecisionEnvelope|ConvertFrom-Json
-if([string]$Envelope.environment -ne "PRODUCTION" -or [string]$Envelope.human_decision -ne $ExactDecision){throw "M10_LIVE_DECISION_INVALID"}
+if([string]$Envelope.environment -ne "PRODUCTION" -or [string]$Envelope.required_human_decision -ne $ExactDecision){throw "M10_LIVE_DECISION_INVALID"}
+$journalPath=Join-Path $EvidenceRoot "m10-execution-journal.jsonl"
+if(-not(Test-Path -LiteralPath $journalPath) -or -not ([IO.File]::ReadAllText($journalPath).Contains("M10_HUMAN_AUTHORITY_ACCEPTED"))){throw "M10_LIVE_AUTHORITY_JOURNAL_MISSING"}
 if(-not(Test-Path -LiteralPath $DeploymentRoot)){throw "M10_LIVE_DEPLOYMENT_MISSING"}
 $head=(& git.exe -C $DeploymentRoot rev-parse HEAD).Trim();if($head -ne [string]$Envelope.candidate_head){throw "M10_LIVE_DEPLOYMENT_HEAD_DRIFT"}
 if((Get-ManifestDigest $DeploymentRoot) -ne [string]$Envelope.candidate_manifest_sha256){throw "M10_LIVE_DEPLOYMENT_MANIFEST_DRIFT"}

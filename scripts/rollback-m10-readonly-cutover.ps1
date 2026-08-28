@@ -28,8 +28,10 @@ New-Item -ItemType Directory -Force -Path $EvidenceRoot | Out-Null
 $Envelope = Get-Content -Raw -LiteralPath $DecisionEnvelope | ConvertFrom-Json
 $Environment = [string]$Envelope.environment
 $ExpectedDecision = if ($Environment -eq "SYNTHETIC") { $SyntheticDecision } else { $ExactDecision }
-if ([string]$Envelope.human_decision -ne $ExpectedDecision) { Block "DECISION_MISMATCH" }
+if ([string]$Envelope.required_human_decision -ne $ExpectedDecision) { Block "REQUIRED_DECISION_MISMATCH" }
 if ($Environment -notin @("SYNTHETIC","PRODUCTION")) { Block "ENVIRONMENT_INVALID" }
+$JournalText = Get-Content -Raw -LiteralPath $ExecutionJournal
+if (-not $JournalText.Contains("M10_HUMAN_AUTHORITY_ACCEPTED")) { Block "AUTHORITY_JOURNAL_MISSING" }
 
 # execution_journal_sha256 is recomputed at rollback entry; a sealed decision cannot pre-bind future journal bytes.
 $JournalSha = Get-Sha256 $ExecutionJournal
