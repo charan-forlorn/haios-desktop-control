@@ -110,3 +110,27 @@ describe("M10 sealed cutover transaction contract", () => {
     expect(rollback).toContain("SYNTHETIC_M10_CUTOVER_TEST_ONLY");
   });
 });
+
+
+describe("M10 post-cutover live qualifier contract", () => {
+  it("is read-only and requires durable dedicated-route MCP proof", async () => {
+    const path = join(process.cwd(), "scripts", "qualify-m10-live.ps1");
+    const source = await readFile(path, "utf8");
+    for (const marker of [
+      "dedicated-route-proof.json",
+      "M10_DEDICATED_ROUTE_PROOF_MISSING",
+      "exact_13_tools",
+      "READ_ONLY_EMERGENCY",
+      "HAIOS-M10-Operator-ReadOnly",
+      "haios-tunnel-client",
+      "haios-operator-dedicated-tunnel-client",
+      "haios-operator-mcp",
+      "secret_acl_pass",
+      "M10_LIVE_READ_ONLY_QUALIFICATION_PASS",
+    ]) expect(source).toContain(marker);
+    for (const forbidden of [
+      "Register-ScheduledTask", "Unregister-ScheduledTask", "Start-ScheduledTask", "Stop-ScheduledTask",
+      " compose up", " compose down", "docker rm", "Remove-Item -LiteralPath $StateRoot",
+    ]) expect(source.toLowerCase()).not.toContain(forbidden.toLowerCase());
+  });
+});
