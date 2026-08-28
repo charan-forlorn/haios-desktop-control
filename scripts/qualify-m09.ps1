@@ -33,7 +33,7 @@ function Get-ContainerIntegrityDigest([string]$Name) {
   $Networks = @($Object.NetworkSettings.Networks.PSObject.Properties | Sort-Object Name | ForEach-Object {
     [ordered]@{ name=$_.Name; network_id=$_.Value.NetworkID; endpoint_id=$_.Value.EndpointID; ip=$_.Value.IPAddress; gateway=$_.Value.Gateway }
   })
-  $Mounts = @($Object.Mounts | ForEach-Object {
+  $Mounts = @($Object.Mounts | Sort-Object Destination,Type | ForEach-Object {
     [ordered]@{ type=$_.Type; destination=$_.Destination; mode=$_.Mode; rw=$_.RW; propagation=$_.Propagation }
   })
   $Snapshot = [ordered]@{

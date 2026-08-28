@@ -98,6 +98,7 @@ describe("M09 qualification fail-closed contract", () => {
       "M09_PREEXISTING_LONG_LIVED_OPERATOR_NOT_EMERGENCY",
       "long_lived_container_integrity",
       "full_regression_started",
+      "Sort-Object Destination,Type",
       "live_helper_started",
       "READ_ONLY_EMERGENCY",
       "scripts\\live-m09-host-parity.mjs",
