@@ -47,6 +47,34 @@ function Get-ContainerHealthStatus([string]$Name) {
   if($LASTEXITCODE -ne 0 -or -not $status){throw "M10_CONTAINER_HEALTH_UNAVAILABLE:$Name"}
   $status
 }
+function Test-ContainerHttpGet([string]$Name,[string]$Url) {
+  & docker.exe exec $Name sh -c "wget -T 3 -qO- '$Url' >/dev/null" 2>$null
+  $LASTEXITCODE -eq 0
+}
+function Get-TunnelFunctionalReadiness([string]$Name,[int]$HealthPort,[string]$BackendHealthUrl) {
+  $state=(& docker.exe inspect --format '{{.State.Status}}' $Name 2>$null).Trim()
+  if($LASTEXITCODE -ne 0 -or -not $state){throw "M10_TUNNEL_STATE_UNAVAILABLE:$Name"}
+  $dockerHealth=Get-ContainerHealthStatus $Name
+  $healthzPass=Test-ContainerHttpGet $Name "http://127.0.0.1:$HealthPort/healthz"
+  $backendReachable=Test-ContainerHttpGet $Name $BackendHealthUrl
+  $metrics=& docker.exe exec $Name sh -c "wget -T 3 -qO- http://127.0.0.1:$HealthPort/metrics" 2>$null
+  $metricsOk=$LASTEXITCODE -eq 0 -and [bool]$metrics
+  $pollRecent=$false; $pollAge=$null
+  if($metricsOk){
+    $match=[regex]::Match(($metrics -join "`n"),'commands_poll_last_successful_timestamp_seconds\{[^}]*\}\s+([0-9.eE+\-]+)')
+    if($match.Success){
+      $poll=[double]::Parse($match.Groups[1].Value,[Globalization.CultureInfo]::InvariantCulture)
+      $pollAge=[Math]::Max(0,[DateTimeOffset]::UtcNow.ToUnixTimeSeconds()-[int64][Math]::Floor($poll))
+      $pollRecent=$pollAge -le 120
+    }
+  }
+  [ordered]@{
+    name=$Name;container_running=($state -eq 'running');docker_health_observation=$dockerHealth
+    healthz_pass=$healthzPass;backend_reachable=$backendReachable
+    control_plane_poll_recent=$pollRecent;control_plane_poll_age_seconds=$pollAge
+    functional_ready=($state -eq 'running' -and $healthzPass -and $backendReachable -and $pollRecent)
+  }
+}
 function Get-ContainerIntegrityDigest([string]$Name) {
   $raw=& docker.exe inspect $Name 2>$null
   if($LASTEXITCODE -ne 0 -or -not $raw){throw "M10_CONTAINER_UNAVAILABLE:$Name"}
@@ -107,21 +135,23 @@ $RollbackSha=Get-Sha256 $RollbackPath
 $PreflightSha=Get-Sha256 $PreflightPath
 $LiveQualifierSha=Get-Sha256 $LiveQualifierPath
 $StrictLauncherSha=Get-Sha256 $StrictLauncherPath
-$SharedTunnelHealth=Get-ContainerHealthStatus "haios-tunnel-client"
-$DedicatedTunnelHealth=Get-ContainerHealthStatus "haios-operator-dedicated-tunnel-client"
-if($SharedTunnelHealth -ne "healthy" -or $DedicatedTunnelHealth -ne "healthy"){
+$SharedTunnelReadiness=Get-TunnelFunctionalReadiness "haios-tunnel-client" 8080 "http://haios-local-mcp:8768/healthz"
+$DedicatedTunnelReadiness=Get-TunnelFunctionalReadiness "haios-operator-dedicated-tunnel-client" 8079 "http://operator-mcp:8769/healthz"
+$TunnelReadiness=[ordered]@{shared=$SharedTunnelReadiness;dedicated=$DedicatedTunnelReadiness}
+Write-JsonNoBom (Join-Path $EvidenceRoot "m10-tunnel-functional-readiness.json") $TunnelReadiness
+if(-not [bool]$SharedTunnelReadiness.functional_ready -or -not [bool]$DedicatedTunnelReadiness.functional_ready){
   $Blocker=[ordered]@{
     mission="HAIOS_DESKTOP_CONTROL_PLANE_R1_M10_STAGED_READ_ONLY_CUTOVER";run_id=$RunId;head=$Head;branch=$Branch
-    blocker=if($SharedTunnelHealth -ne "healthy"){"M10_SHARED_TUNNEL_READINESS_FAILED"}else{"M10_DEDICATED_TUNNEL_READINESS_FAILED"}
-    shared_tunnel_health=$SharedTunnelHealth;dedicated_tunnel_health=$DedicatedTunnelHealth
+    blocker=if(-not [bool]$SharedTunnelReadiness.functional_ready){"M10_SHARED_TUNNEL_FUNCTIONAL_READINESS_FAILED"}else{"M10_DEDICATED_TUNNEL_FUNCTIONAL_READINESS_FAILED"}
+    shared_tunnel=$SharedTunnelReadiness;dedicated_tunnel=$DedicatedTunnelReadiness
     listener_8768=@($Listener8768Pre);listener_8769=@($Listener8769Pre);operator_mode="READ_ONLY_EMERGENCY"
     production_mutation_performed=$false;task_created=$false;secret_created=$false;tunnel_reconfigured=$false
     terminal="HAIOS_DESKTOP_CONTROL_PLANE_R1_M10_BLOCKED_PREEXISTING_TUNNEL_READINESS"
   }
   $BlockerPath=Join-Path $EvidenceRoot "m10-operational-readiness-blocker.json"
   Write-JsonNoBom $BlockerPath $Blocker
-  if($SharedTunnelHealth -ne "healthy"){throw "M10_SHARED_TUNNEL_READINESS_FAILED"}
-  throw "M10_DEDICATED_TUNNEL_READINESS_FAILED"
+  if(-not [bool]$SharedTunnelReadiness.functional_ready){throw "M10_SHARED_TUNNEL_FUNCTIONAL_READINESS_FAILED"}
+  throw "M10_DEDICATED_TUNNEL_FUNCTIONAL_READINESS_FAILED"
 }
 Write-Host "M10_PRECONDITIONS=PASS"
 Write-Host "M10_PRODUCTION_MUTATION_PERFORMED=FALSE"

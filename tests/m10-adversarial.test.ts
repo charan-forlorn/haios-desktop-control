@@ -34,13 +34,15 @@ describe("M10 adversarial pre-live boundary", () => {
       "M10_SHARED_TUNNEL_DRIFT", "M10_SECURE_8768_DRIFT",
     ]) expect(source).toContain(marker);
   });
-  it("blocks pre-live qualification when either long-lived tunnel is not currently healthy", async () => {
+  it("uses functional tunnel readiness and records Docker health only as an observation", async () => {
     const source = await readFile(qualifierPath, "utf8");
     for (const marker of [
-      "haios-tunnel-client", "haios-operator-dedicated-tunnel-client",
-      "Get-ContainerHealthStatus", "M10_SHARED_TUNNEL_READINESS_FAILED",
-      "M10_DEDICATED_TUNNEL_READINESS_FAILED", "m10-operational-readiness-blocker.json",
+      "Get-TunnelFunctionalReadiness", "healthz_pass", "backend_reachable",
+      "control_plane_poll_recent", "docker_health_observation", "commands_poll_last_successful_timestamp_seconds",
+      "M10_SHARED_TUNNEL_FUNCTIONAL_READINESS_FAILED", "M10_DEDICATED_TUNNEL_FUNCTIONAL_READINESS_FAILED",
+      "m10-operational-readiness-blocker.json",
     ]) expect(source).toContain(marker);
+    expect(source).not.toContain('$SharedTunnelHealth -ne "healthy" -or $DedicatedTunnelHealth -ne "healthy"');
   });
 
   it("seals exact executor, rollback, preflight, live verifier, manifest and Human decision", async () => {
