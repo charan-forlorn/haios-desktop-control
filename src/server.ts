@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { join } from "node:path";
 import { createServer, type Server as HttpServer } from "node:http";
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -18,8 +19,11 @@ import {
   READ_TOOL_DEFINITIONS,
 } from "./capabilities.js";
 import { dispatchExecuteTool } from "./execute.js";
+import { TransactionMutationAdapter } from "./transactions/adapter.js";
+import { createGitCurrentnessProvider, TRANSACTION_PROJECT_ROOT } from "./transactions/currentness.js";
+import { TransactionService, dispatchTransactionTool, type TransactionServiceApi } from "./transactions/service.js";
 import { dispatchReadTool } from "./tools/read-tools.js";
-import type { DesktopCommanderExecuteClient, DesktopCommanderReadClient } from "./upstream.js";
+import type { DesktopCommanderExecuteClient, DesktopCommanderMutationClient, DesktopCommanderReadClient } from "./upstream.js";
 
 const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_PORT = 8772;
@@ -40,6 +44,7 @@ export interface GatewayServerConfig {
   readonly apiKey: string;
   readonly upstream: DesktopCommanderReadClient;
   readonly auditSink?: AuditSink;
+  readonly transactionService?: TransactionServiceApi;
   readonly host?: string;
   readonly port?: number;
 }
@@ -51,6 +56,12 @@ function isExecuteClient(upstream: DesktopCommanderReadClient): upstream is Desk
     typeof candidate.readProcessOutput === "function" &&
     typeof candidate.killProcess === "function"
   );
+}
+
+function isMutationClient(upstream: DesktopCommanderReadClient): upstream is DesktopCommanderMutationClient {
+  if (!isExecuteClient(upstream)) return false;
+  const candidate = upstream as Partial<DesktopCommanderMutationClient>;
+  return typeof candidate.writeFile === "function" && typeof candidate.moveFile === "function";
 }
 
 function objectSchema(
@@ -158,6 +169,17 @@ export async function createGatewayServer(
   }
 
   const auditSink = config.auditSink ?? NOOP_AUDIT_SINK;
+  const mutationUpstream = isMutationClient(config.upstream) ? config.upstream : undefined;
+  const transactionService = config.transactionService ?? (mutationUpstream === undefined ? undefined : new TransactionService({
+    currentness: createGitCurrentnessProvider(),
+    adapter: new TransactionMutationAdapter(mutationUpstream),
+    rollbackRoot: join(TRANSACTION_PROJECT_ROOT, "runtime"),
+    verifier: async () => {
+      const result = await dispatchExecuteTool("project_test", {}, { upstream: mutationUpstream });
+      return result.decision === "ALLOW" && result.preStateDigest === result.postStateDigest;
+    },
+    verificationProfile: "project_test",
+  }));
   const createMcpServerForRequest = () => {
     const mcp = new Server(
       { name: "haios-desktop-control-m01", version: "0.1.0" },
@@ -179,7 +201,9 @@ export async function createGatewayServer(
       try {
         const result =
           capabilityClass === "MUTATE"
-            ? { decision: "DENY" as const, reason: "MUTATE_NOT_IMPLEMENTED" }
+            ? transactionService === undefined
+              ? { decision: "DENY" as const, reason: "MUTATE_SERVICE_UNAVAILABLE" }
+              : await dispatchTransactionTool(transactionService, name, args)
             : capabilityClass === "EXECUTE"
               ? isExecuteClient(config.upstream)
                 ? await dispatchExecuteTool(name, args, { upstream: config.upstream })

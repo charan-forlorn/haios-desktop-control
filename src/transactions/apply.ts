@@ -7,7 +7,7 @@ import type { RollbackPlan, TransactionIntent } from "./types.js";
 import type { TransactionStore } from "./store.js";
 
 export type ApplyTransactionResult =
-  | { readonly decision: "ALLOW"; readonly state: "APPLIED" }
+  | { readonly decision: "ALLOW"; readonly state: "APPLIED"; readonly rollbackPlans: readonly RollbackPlan[] }
   | { readonly decision: "DENY"; readonly reason: string };
 
 async function planForIntent(
@@ -94,7 +94,7 @@ export async function applyTransaction(
     const completed = nextTransactionState(record.state, "apply_complete");
     if (completed.decision !== "ALLOW") throw new Error(completed.reason);
     record.state = completed.state;
-    return { decision: "ALLOW", state: "APPLIED" };
+    return { decision: "ALLOW", state: "APPLIED", rollbackPlans: Object.freeze([...plans]) };
   } catch {
     const rollbackRequired = nextTransactionState(record.state, "require_rollback");
     if (rollbackRequired.decision === "ALLOW") record.state = rollbackRequired.state;
