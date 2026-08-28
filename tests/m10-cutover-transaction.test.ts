@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 const executePath = join(process.cwd(), "scripts", "execute-m10-readonly-cutover.ps1");
 const rollbackPath = join(process.cwd(), "scripts", "rollback-m10-readonly-cutover.ps1");
 const launcherPath = join(process.cwd(), "scripts", "run-m10-readonly-runtime.mjs");
+const supervisorPath = join(process.cwd(), "scripts", "run-m10-readonly-supervisor.mjs");
 
 describe("M10 sealed cutover transaction contract", () => {
   it("hard-binds every production integration point", async () => {
@@ -24,11 +25,16 @@ describe("M10 sealed cutover transaction contract", () => {
 
   it("uses the strict M10 launcher and wrapper", async () => {
     const launcher = await readFile(launcherPath, "utf8");
+    const supervisor = await readFile(supervisorPath, "utf8");
     expect(launcher).toContain("validateM10ReadOnlyProductionConfig");
     expect(launcher).toContain("m10-production-config.js");
     expect(launcher).not.toContain("M09_TEST_ONLY");
+    expect(supervisor).toContain("run-m10-readonly-runtime.mjs");
+    expect(supervisor).toContain("process.execPath");
     const source = await readFile(executePath, "utf8");
     expect(source).toContain("run-m10-readonly-runtime.mjs");
+    expect(source).toContain("run-m10-readonly-supervisor.mjs");
+    expect(source).toContain("$supervisor");
     expect(source).not.toContain("run-m09-host-runtime.mjs");
   });
 

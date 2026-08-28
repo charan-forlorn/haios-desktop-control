@@ -72,9 +72,9 @@ if ((Get-Sha256 $PSCommandPath) -ne [string]$Envelope.rollback_sha256) { Block "
 
 $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 if ($task) {
-  $expectedLauncher = Join-Path $DeploymentRoot "scripts\run-m10-readonly-runtime.mjs"
+  $expectedSupervisor = Join-Path $DeploymentRoot "scripts\run-m10-readonly-supervisor.mjs"
   $action = @($task.Actions)[0]
-  if (-not ([string]$action.Arguments).Contains($expectedLauncher)) { Block "TASK_IDENTITY_DRIFT" }
+  if (-not ([string]$action.Arguments).Contains($expectedSupervisor)) { Block "TASK_IDENTITY_DRIFT" }
 }
 
 $dedicated = (& docker.exe inspect haios-operator-dedicated-tunnel-client 2>$null | ConvertFrom-Json)[0]

@@ -83,9 +83,9 @@ function Test-AclFixture {
 function Test-TaskSchedulerFeasibility {
   $identity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
   $node = "C:\Program Files\nodejs\node.exe"
-  $launcher = "C:\Workspace\haios-desktop-control-runtime\scripts\run-m10-readonly-runtime.mjs"
+  $supervisor = "C:\Workspace\haios-desktop-control-runtime\scripts\run-m10-readonly-supervisor.mjs"
   $config = Join-Path $env:LOCALAPPDATA "HAIOS\M10\host-config.json"
-  $action = New-ScheduledTaskAction -Execute $node -Argument "`"$launcher`" `"$config`""
+  $action = New-ScheduledTaskAction -Execute $node -Argument "`"$supervisor`" `"$config`""
   $trigger = New-ScheduledTaskTrigger -AtLogOn -User $identity
   $principal = New-ScheduledTaskPrincipal -UserId $identity -LogonType Interactive -RunLevel Limited
   $settings = New-ScheduledTaskSettingsSet -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
@@ -96,6 +96,7 @@ function Test-TaskSchedulerFeasibility {
     run_level=[string]$task.Principal.RunLevel
     action_execute=[string]$task.Actions.Execute
     action_argument=[string]$task.Actions.Arguments
+    supervisor_bound=([string]$task.Actions.Arguments).Contains($supervisor)
     trigger_user=[string]$task.Triggers.UserId
     restart_count=[int]$task.Settings.RestartCount
     no_password_stored=$true

@@ -19,6 +19,7 @@ $SyntheticRoot = Join-Path $Root "runtime\m10-cutover-fixture"
 $ParentCert = "C:\Workspace\haios-desktop-control-m09\evidence\m09\20260828T151328Z\m09-final-certification.json"
 $RollbackScript = Join-Path $Root "scripts\rollback-m10-readonly-cutover.ps1"
 $StrictLauncher = "run-m10-readonly-runtime.mjs"
+$StrictSupervisor = "run-m10-readonly-supervisor.mjs"
 $ExactDecision = "APPROVE HAIOS_DESKTOP_CONTROL_PLANE_R1_M10_STAGED_READ_ONLY_CUTOVER"
 $SyntheticDecision = "SYNTHETIC_M10_CUTOVER_TEST_ONLY"
 function Get-Sha256([string]$Path) { (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant() }
@@ -243,8 +244,11 @@ services:
   Write-JsonNoBom $ConfigPath $Config
 
   $identityName=[Security.Principal.WindowsIdentity]::GetCurrent().Name
-  $node="C:\Program Files\nodejs\node.exe"; $launcher=Join-Path $DeploymentRoot "scripts\$StrictLauncher"
-  $action=New-ScheduledTaskAction -Execute $node -Argument "`"$launcher`" `"$ConfigPath`""
+  $node="C:\Program Files\nodejs\node.exe"
+  $launcher=Join-Path $DeploymentRoot "scripts\$StrictLauncher"
+  $supervisor=Join-Path $DeploymentRoot "scripts\$StrictSupervisor"
+  if(-not(Test-Path -LiteralPath $launcher) -or -not(Test-Path -LiteralPath $supervisor)){throw "M10_SUPERVISOR_DEPLOYMENT_MISSING"}
+  $action=New-ScheduledTaskAction -Execute $node -Argument "`"$supervisor`" `"$ConfigPath`""
   $trigger=New-ScheduledTaskTrigger -AtLogOn -User $identityName
   $principal=New-ScheduledTaskPrincipal -UserId $identityName -LogonType Interactive -RunLevel Limited
   $settings=New-ScheduledTaskSettingsSet -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
