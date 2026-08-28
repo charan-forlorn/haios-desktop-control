@@ -11,6 +11,7 @@ import type {
 export interface OperatorTransactionGit {
   head(cwd: string): Promise<string>;
   status(cwd: string): Promise<string>;
+  commonDir(cwd: string): Promise<string>;
   worktreeAdd(repo: string, path: string, branch: string, startPoint: string): Promise<void>;
   worktreeRemove(repo: string, path: string): Promise<void>;
   deleteBranch(repo: string, branch: string): Promise<void>;
@@ -136,11 +137,20 @@ export class OperatorTransactionService {
   readonly #allowedProjects: Readonly<Record<string, string>>;
   readonly #git: OperatorTransactionGit;
   readonly #records = new Map<string, MutableRecord>();
+  readonly #repositoryIdentity = new Map<string, string>();
 
   constructor(config: OperatorTransactionServiceConfig) {
     this.#worktreeRoot = win32.resolve(config.worktreeRoot);
     this.#allowedProjects = Object.freeze({ ...config.allowedProjects });
     this.#git = config.git;
+  }
+
+  async #commonDirAbsolute(cwd: string): Promise<string | null> {
+    try {
+      const raw = (await this.#git.commonDir(cwd)).trim();
+      if (raw.length === 0) return null;
+      return win32.normalize(win32.isAbsolute(raw) ? raw : win32.resolve(cwd, raw));
+    } catch { return null; }
   }
 
   async begin(projectId: string, canonicalRoot: string): Promise<OperatorTransactionResult> {
@@ -156,6 +166,8 @@ export class OperatorTransactionService {
     if ((await this.#git.status(canonicalReal)).trim().length !== 0) return { decision: "DENY", reason: "CANONICAL_DIRTY" };
     const baseHeadSha = await this.#git.head(canonicalReal);
     if (!FULL_GIT_SHA.test(baseHeadSha)) return { decision: "DENY", reason: "CANONICAL_HEAD_INVALID" };
+    const canonicalIdentity = await this.#commonDirAbsolute(canonicalReal);
+    if (canonicalIdentity === null) return { decision: "DENY", reason: "CANONICAL_GIT_IDENTITY_UNAVAILABLE" };
 
     const idHex = randomUUID().replace(/-/g, "").toLowerCase();
     const txId = `txn_${idHex}`;
@@ -164,7 +176,12 @@ export class OperatorTransactionService {
     if (await exists(worktreePath)) return { decision: "DENY", reason: "WORKTREE_PATH_EXISTS" };
     try { await this.#git.worktreeAdd(canonicalReal, worktreePath, branchName, baseHeadSha); }
     catch { return { decision: "DENY", reason: "WORKTREE_CREATE_FAILED" }; }
+    const worktreeIdentity = await this.#commonDirAbsolute(worktreePath);
+    if (worktreeIdentity === null || !samePath(worktreeIdentity, canonicalIdentity)) {
+      return { decision: "DENY", reason: "WORKTREE_REPOSITORY_IDENTITY_MISMATCH" };
+    }
     if ((await this.#git.head(worktreePath)) !== baseHeadSha || (await this.#git.status(worktreePath)).trim().length !== 0) {
+      try { await this.#git.worktreeRemove(canonicalReal, worktreePath); await this.#git.deleteBranch(canonicalReal, branchName); } catch { }
       return { decision: "DENY", reason: "WORKTREE_BASE_MISMATCH" };
     }
 
@@ -173,6 +190,7 @@ export class OperatorTransactionService {
       createdAt: new Date().toISOString(), state: "OPEN", intents: [],
     };
     this.#records.set(txId, record);
+    this.#repositoryIdentity.set(txId, canonicalIdentity);
     return allow(record);
   }
   #record(txId: string): MutableRecord | undefined {
@@ -298,17 +316,23 @@ export class OperatorTransactionService {
   }
 
   async #discardRuntime(record: MutableRecord): Promise<boolean> {
-    let clean = true;
+    const expectedIdentity = this.#repositoryIdentity.get(record.txId);
+    if (expectedIdentity === undefined) return false;
+    const canonicalIdentity = await this.#commonDirAbsolute(record.canonicalRoot);
+    const worktreeIdentity = await this.#commonDirAbsolute(record.worktreePath);
+    if (canonicalIdentity === null || worktreeIdentity === null) return false;
+    if (!samePath(canonicalIdentity, expectedIdentity) || !samePath(worktreeIdentity, expectedIdentity)) return false;
     try { await this.#git.worktreeRemove(record.canonicalRoot, record.worktreePath); }
-    catch { clean = false; }
+    catch { return false; }
     try { await this.#git.deleteBranch(record.canonicalRoot, record.branchName); }
-    catch { clean = false; }
-    return clean;
+    catch { return false; }
+    this.#repositoryIdentity.delete(record.txId);
+    return true;
   }
 
   async #discard(record: MutableRecord): Promise<boolean> {
     const clean = await this.#discardRuntime(record);
-    record.state = "ROLLED_BACK";
+    if (clean) record.state = "ROLLED_BACK";
     return clean;
   }
 

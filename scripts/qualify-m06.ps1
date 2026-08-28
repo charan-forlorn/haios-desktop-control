@@ -180,6 +180,7 @@ if (-not $Live.canonicalUnchangedBeforePromotion -or $Live.worktreeResidue -ne 0
 Write-Host "LIVE_STALE_HEAD_CONFLICT=PASS"
 Write-Host "LIVE_FF_PROMOTION=PASS"
 Write-Host "LIVE_ISOLATION=PASS"
+Write-Host "REPOSITORY_IDENTITY_BOUND=PASS"
 Write-Host "[5] Cleanup and post-state reconciliation"
 Remove-Item -LiteralPath $RuntimeRoot -Recurse -Force
 $RuntimeResidue = if (Test-Path -LiteralPath $RuntimeRoot) { 1 } else { 0 }
@@ -232,6 +233,7 @@ $Result = [ordered]@{
     live_stale_head_conflict = "PASS"
     live_ff_only_promotion = "PASS"
     live_isolation = "PASS"
+    repository_identity_bound = $true
     live_checkpoint = [string]$Live.checkpoint2
     live_final_head = [string]$Live.finalHead
     runtime_residue = 0
@@ -263,7 +265,7 @@ $Handoff = [ordered]@{
         "HEAD_MATCH","MANIFEST_MATCH","AUTHORITY_SOURCE_BOUND","LEGACY27_PRESERVED",
         "OPERATOR13_STILL_INACTIVE","LOCAL_GIT_NO_NETWORK_AUTHORITY","ISOLATED_WORKTREE_ONLY",
         "PATH_REPARSE_FAIL_CLOSED","CHECKPOINT_DESCENDANT_BOUND","CAS_CONFLICT_PREMERGE",
-        "FF_ONLY_PROMOTION","ROLLBACK_OWNED_RUNTIME_ONLY","TUNNEL_INTEGRITY",
+        "FF_ONLY_PROMOTION","REPOSITORY_IDENTITY_BOUND","ROLLBACK_OWNED_RUNTIME_ONLY","TUNNEL_INTEGRITY",
         "RUNTIME_CLEANUP","SECRETS_PERSISTED_FALSE"
     )
     allowed_verdicts = @("PASS","BLOCKED")

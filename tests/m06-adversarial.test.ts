@@ -1,4 +1,4 @@
-import { cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -9,6 +9,7 @@ const SHA_A = "a".repeat(40);
 const SHA_B = "b".repeat(40);
 const roots: string[] = [];
 const b64 = (value: string) => Buffer.from(value, "utf8").toString("base64");
+async function exists(path: string) { try { await stat(path); return true; } catch { return false; } }
 
 afterEach(async () => {
   for (const root of roots.splice(0).reverse()) await rm(root, { recursive: true, force: true });
@@ -20,10 +21,12 @@ class AdversarialGit implements OperatorTransactionGit {
   checkpoint = SHA_B;
   ancestor = true;
   cleanupFails = false;
+  identityMismatch = false;
   mergeCalls = 0;
 
   async head() { return this.canonicalHead; }
   async status() { return this.canonicalStatus; }
+  async commonDir(cwd: string) { return this.identityMismatch && cwd.toLowerCase().includes("worktrees") ? "C:\\foreign\\.git" : "C:\\shared\\.git"; }
   async worktreeAdd(repo: string, path: string) {
     await mkdir(path, { recursive: true });
     await cp(repo, path, { recursive: true, filter: (source) => !source.includes("\\.git") });
@@ -113,6 +116,29 @@ describe("M06 adversarial authority boundaries", () => {
     expect(fx.git.mergeCalls).toBe(0);
   });
 
+  it("rejects a newly created worktree whose shared Git identity mismatches canonical", async () => {
+    const canonical = await mkdtemp("C:\\Workspace\\m06-adv-identity-canonical-");
+    const worktreeRoot = await mkdtemp("C:\\Workspace\\m06-adv-identity-worktrees-");
+    roots.push(canonical, worktreeRoot);
+    await writeFile(join(canonical, "alpha.txt"), "alpha", "utf8");
+    const git = new AdversarialGit();
+    git.identityMismatch = true;
+    const service = new OperatorTransactionService({ worktreeRoot, allowedProjects: { demo: canonical }, git });
+    await expect(service.begin("demo", canonical)).resolves.toEqual({
+      decision: "DENY", reason: "WORKTREE_REPOSITORY_IDENTITY_MISMATCH",
+    });
+  });
+
+  it("refuses rollback cleanup after repository identity drifts", async () => {
+    const fx = await checkpointed();
+    fx.git.identityMismatch = true;
+    await expect(fx.service.rollback(fx.tx)).resolves.toEqual({
+      decision: "DENY", reason: "ROLLBACK_CLEANUP_PENDING",
+    });
+    expect(await exists(fx.worktree)).toBe(true);
+    await expect(fx.service.status(fx.tx)).resolves.toMatchObject({ decision: "ALLOW", state: "CHECKPOINTED" });
+    expect(fx.git.canonicalHead).toBe(SHA_A);
+  });
   it("fails closed when rollback cleanup ownership cannot be completed", async () => {
     const fx = await checkpointed();
     fx.git.cleanupFails = true;
@@ -134,7 +160,7 @@ describe("M06 qualification contract", () => {
     for (const marker of [
       "POWERSHELL_7_REQUIRED", "M06_ADVERSARIAL_TESTS", "FULL_TEST_PASSING_COUNT",
       "[StringComparer]::Ordinal", "LIVE_STALE_HEAD_CONFLICT=PASS", "LIVE_FF_PROMOTION=PASS",
-      "RUNTIME_RESIDUE=0", "TUNNEL_INTEGRITY=PASS", "PORT_8772_FREE=PASS",
+      "RUNTIME_RESIDUE=0", "REPOSITORY_IDENTITY_BOUND=PASS", "TUNNEL_INTEGRITY=PASS", "PORT_8772_FREE=PASS",
       "HAIOS_DESKTOP_CONTROL_PLANE_R1_M06_READY_FOR_INDEPENDENT_VERIFICATION",
     ]) expect(script).toContain(marker);
     expect(script).not.toContain("'sk-[A-Za-z0-9_-]+'");

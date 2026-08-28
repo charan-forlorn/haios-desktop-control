@@ -22,6 +22,7 @@ class FakeGit implements OperatorTransactionGit {
 
   async head(cwd: string) { this.calls.push({ op: "head", args: [cwd] }); return this.canonicalHead; }
   async status(cwd: string) { this.calls.push({ op: "status", args: [cwd] }); return this.canonicalStatus; }
+  async commonDir(_cwd: string) { return "C:\\shared\\.git"; }
   async worktreeAdd(repo: string, path: string, branch: string, start: string) {
     this.calls.push({ op: "worktreeAdd", args: [repo, path, branch, start] });
     await mkdir(path, { recursive: true });
