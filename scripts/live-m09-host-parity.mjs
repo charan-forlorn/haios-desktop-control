@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -95,6 +95,23 @@ let worktreeResidueZero = false;
 let apiKeyFileRemoved = false;
 let baselineHead;
 let checkpointId;
+let tunnelExactToolSurface = false;
+let tunnelStatusPassed = false;
+let tunnelCapabilitiesPassed = false;
+let tunnelParityPassed = false;
+let tunnelContainerRemoved = false;
+let tunnelLogsSecretFree = false;
+let tunnelProcess;
+let tunnelStdout = "";
+let tunnelStderr = "";
+const tunnelImage = "ghcr.io/openai/tunnel-client:v0.0.11";
+const syntheticTunnelId = "tunnel_22222222222222222222222222222222";
+const tunnelProxyPort = 18773;
+const tunnelContainerName = `haios-m09-tunnel-parity-${process.pid}-${randomBytes(4).toString("hex")}`;
+const tunnelTargetUrl = `http://host.docker.internal:${directPort}/mcp`;
+const tunnelProxyUrl = `http://127.0.0.1:${tunnelProxyPort}/v1/mcp/${syntheticTunnelId}`;
+const sleep = (ms) => new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
+const appendBounded = (current, chunk) => (current + chunk.toString("utf8")).slice(-1024 * 1024);
 
 try {
   const listed = await client.listTools();
@@ -210,8 +227,80 @@ try {
   const remaining = await readdir(worktreeRoot);
   worktreeResidueZero = remaining.length === 0;
   if (!worktreeResidueZero) throw new Error("M09_LIVE_WORKTREE_RESIDUE");
+
+  const tunnelArgs = [
+    "run", "--rm",
+    "--name", tunnelContainerName,
+    "--label", "haios.m09.owner=host-parity",
+    "-p", `127.0.0.1:${tunnelProxyPort}:8783`,
+    "--mount", `type=bind,source=${apiKeyFile},target=/run/secrets/m09-api-key,readonly`,
+    "-e", "MCP_EXTRA_HEADERS=X-API-Key: file:/run/secrets/m09-api-key",
+    tunnelImage,
+    "dev", "proxy",
+    "--backend", "go",
+    "--listen", "0.0.0.0:8783",
+    "--mcp-server-url", tunnelTargetUrl,
+    "--tunnel-id", syntheticTunnelId,
+    "--duration", "45s",
+    "--print-json",
+  ];
+  tunnelProcess = spawn("docker", tunnelArgs, { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+  tunnelProcess.stdout?.on("data", (chunk) => { tunnelStdout = appendBounded(tunnelStdout, chunk); });
+  tunnelProcess.stderr?.on("data", (chunk) => { tunnelStderr = appendBounded(tunnelStderr, chunk); });
+
+  let tunnelClient;
+  let tunnelLastError;
+  const tunnelDeadline = Date.now() + 20_000;
+  while (Date.now() < tunnelDeadline && tunnelClient === undefined) {
+    const candidate = new Client({ name: "m09-tunnel-parity", version: "1.0.0" });
+    try {
+      await candidate.connect(new StreamableHTTPClientTransport(new URL(tunnelProxyUrl)));
+      tunnelClient = candidate;
+    } catch (error) {
+      tunnelLastError = error;
+      await candidate.close().catch(() => undefined);
+      await sleep(250);
+    }
+  }
+  if (tunnelClient === undefined) {
+    void tunnelLastError;
+    throw new Error("M09_TUNNEL_PARITY_FAILED");
+  }
+  try {
+    const tunnelListed = await tunnelClient.listTools();
+    const tunnelNames = tunnelListed.tools.map((tool) => tool.name);
+    tunnelExactToolSurface = tunnelNames.length === OPERATOR_V1_TOOL_NAMES.length
+      && tunnelNames.every((name, index) => name === OPERATOR_V1_TOOL_NAMES[index]);
+    const tunnelCall = async (name) => payload(await tunnelClient.callTool({ name, arguments: {} }));
+    const tunnelStatus = await tunnelCall("operator_status");
+    const tunnelCapabilities = await tunnelCall("operator_capabilities");
+    tunnelStatusPassed = tunnelStatus.mode === "ACTIVE" && tunnelStatus.destructive === "LOCKED";
+    tunnelCapabilitiesPassed = tunnelCapabilities.s2Enabled === false
+      && tunnelCapabilities.genericExec === false
+      && tunnelCapabilities.genericShell === false
+      && tunnelCapabilities.destructive === "LOCKED";
+    tunnelParityPassed = tunnelExactToolSurface && tunnelStatusPassed && tunnelCapabilitiesPassed;
+    if (!tunnelParityPassed) throw new Error("M09_TUNNEL_PARITY_FAILED");
+  } finally {
+    await tunnelClient.close().catch(() => undefined);
+  }
 } finally {
   await client.close().catch(() => undefined);
+  if (tunnelProcess !== undefined) {
+    await run("docker", ["rm", "-f", tunnelContainerName], { windowsHide: true }).catch(() => undefined);
+    await new Promise((resolveExit) => {
+      if (tunnelProcess.exitCode !== null) resolveExit();
+      else {
+        tunnelProcess.once("exit", resolveExit);
+        setTimeout(resolveExit, 5_000);
+      }
+    });
+  }
+  const tunnelResidue = await run("docker", [
+    "ps", "-a", "--filter", `name=^/${tunnelContainerName}$`, "--format", "{{.ID}}",
+  ], { windowsHide: true, encoding: "utf8" }).catch(() => ({ stdout: "UNKNOWN" }));
+  tunnelContainerRemoved = String(tunnelResidue.stdout).trim() === "";
+  tunnelLogsSecretFree = !(tunnelStdout + tunnelStderr).includes(apiKey);
   await gateway.close().catch(() => undefined);
   await rm(apiKeyFile, { force: true }).catch(() => undefined);
   try {
@@ -224,6 +313,9 @@ try {
 }
 
 if (!apiKeyFileRemoved) throw new Error("M09_LIVE_API_KEY_RESIDUE");
+if (!tunnelContainerRemoved) throw new Error("M09_TUNNEL_CONTAINER_RESIDUE");
+if (!tunnelLogsSecretFree) throw new Error("M09_SECRET_PERSISTENCE_DETECTED");
+if (!tunnelParityPassed) throw new Error("M09_TUNNEL_PARITY_FAILED");
 const result = Object.freeze({
   exactToolSurface,
   activeStatusPassed,
@@ -237,6 +329,13 @@ const result = Object.freeze({
   stalePromotionNoMutation,
   worktreeResidueZero,
   apiKeyFileRemoved,
+  tunnelExactToolSurface,
+  tunnelStatusPassed,
+  tunnelCapabilitiesPassed,
+  tunnelParityPassed,
+  tunnelContainerRemoved,
+  tunnelLogsSecretFree,
+  tunnelProxyPort,
   directPort,
 });
 await mkdir(dirname(resolve(resultPath)), { recursive: true });
