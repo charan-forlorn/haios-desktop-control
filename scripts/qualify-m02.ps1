@@ -17,6 +17,26 @@ function Require-Exit([string]$Name) {
     if ($LASTEXITCODE -ne 0) { throw "$Name failed with exit $LASTEXITCODE" }
 }
 
+$TunnelContainers = @(
+    "haios-tunnel-client",
+    "haios-operator-dedicated-tunnel-client"
+)
+
+function Get-TunnelIntegrityDigest([string]$ContainerName) {
+    $Raw = & docker.exe inspect $ContainerName 2>$null
+    if ($LASTEXITCODE -ne 0 -or -not $Raw) { throw "TUNNEL_CONTAINER_UNAVAILABLE:$ContainerName" }
+    $Object = ($Raw | ConvertFrom-Json)[0]
+    $Networks = @($Object.NetworkSettings.Networks.PSObject.Properties | Sort-Object Name | ForEach-Object {
+        [ordered]@{ name=$_.Name; network_id=$_.Value.NetworkID; endpoint_id=$_.Value.EndpointID; ip=$_.Value.IPAddress; gateway=$_.Value.Gateway; aliases=@($_.Value.Aliases) }
+    })
+    $Mounts = @($Object.Mounts | ForEach-Object {
+        [ordered]@{ type=$_.Type; source=$_.Source; destination=$_.Destination; mode=$_.Mode; rw=$_.RW; propagation=$_.Propagation }
+    })
+    $Snapshot = [ordered]@{ id=$Object.Id; created=$Object.Created; image_id=$Object.Image; config_image=$Object.Config.Image; path=$Object.Path; args=@($Object.Args); network_mode=$Object.HostConfig.NetworkMode; restart_policy=$Object.HostConfig.RestartPolicy; mounts=$Mounts; networks=$Networks }
+    $Bytes = [Text.Encoding]::UTF8.GetBytes(($Snapshot | ConvertTo-Json -Depth 8 -Compress))
+    return [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($Bytes)).ToLowerInvariant()
+}
+
 Write-Host "M02_RUN_ID=$RunId"
 Write-Host "[1] Currentness and static gates"
 if ((git status --porcelain).Length -ne 0) { throw "WORKTREE_NOT_CLEAN" }
@@ -24,6 +44,12 @@ $Head = (git rev-parse HEAD).Trim()
 $Branch = (git branch --show-current).Trim()
 Write-Host "HEAD=$Head"
 Write-Host "BRANCH=$Branch"
+Write-Host "[1b] Tunnel integrity preimage"
+$TunnelPreDigests = @{}
+foreach ($TunnelContainer in $TunnelContainers) {
+    $TunnelPreDigests[$TunnelContainer] = Get-TunnelIntegrityDigest $TunnelContainer
+}
+Write-Host "TUNNEL_PREIMAGE=PASS"
 Write-Host "[2] Test gates"
 & npm.cmd test -- tests/m02-adversarial.test.ts
 Require-Exit "M02_ADVERSARIAL_TESTS"
@@ -235,6 +261,23 @@ if (-not (Test-Port 8768)) { throw "POST_SECURE_MCP_8768_REGRESSION" }
 if (-not (Test-Port 8769)) { throw "POST_OPERATOR_MCP_8769_REGRESSION" }
 if (Test-Port 8771) { throw "POST_Q2R1_PORT_8771_NOT_FREE" }
 if (Test-Port 8772) { throw "POST_M02_PORT_8772_NOT_FREE" }
+$TunnelPostDigests = @{}
+$TunnelIntegrityEvidence = @()
+$TunnelModified = $false
+foreach ($TunnelContainer in $TunnelContainers) {
+    $TunnelPostDigests[$TunnelContainer] = Get-TunnelIntegrityDigest $TunnelContainer
+    $Match = $TunnelPreDigests[$TunnelContainer] -eq $TunnelPostDigests[$TunnelContainer]
+    if (-not $Match) { $TunnelModified = $true }
+    $TunnelIntegrityEvidence += [ordered]@{
+        name = $TunnelContainer
+        pre_sha256 = $TunnelPreDigests[$TunnelContainer]
+        post_sha256 = $TunnelPostDigests[$TunnelContainer]
+        match = $Match
+    }
+}
+if ($TunnelModified) { throw "TUNNEL_INTEGRITY_DRIFT" }
+Write-Host "TUNNEL_INTEGRITY=PASS"
+
 $ManifestPath = Join-Path $EvidenceRoot "source-manifest.txt"
 $ManifestLines = @()
 foreach ($Relative in (git ls-files | Sort-Object)) {
@@ -287,7 +330,8 @@ $Result = [ordered]@{
     port_8771_free = $true
     port_8772_cleanup = "PASS"
     secrets_persisted = $false
-    tunnel_modified = $false
+    tunnel_integrity = @($TunnelIntegrityEvidence)
+    tunnel_modified = $TunnelModified
     independent_verification = "PENDING"
     terminal = "HAIOS_DESKTOP_CONTROL_PLANE_R1_M02_READY_FOR_INDEPENDENT_VERIFICATION"
 }
