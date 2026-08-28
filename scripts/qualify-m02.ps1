@@ -27,8 +27,15 @@ Write-Host "BRANCH=$Branch"
 Write-Host "[2] Test gates"
 & npm.cmd test -- tests/m02-adversarial.test.ts
 Require-Exit "M02_ADVERSARIAL_TESTS"
-& npm.cmd test
+$FullTestLog = Join-Path $EvidenceRoot "full-tests.log"
+& npm.cmd test 2>&1 | Tee-Object -FilePath $FullTestLog
 Require-Exit "FULL_TESTS"
+$FullTestText = ([IO.File]::ReadAllText($FullTestLog) -replace "`e\[[0-9;?]*[ -/]*[@-~]", "")
+$FullTestMatch = [regex]::Match($FullTestText, 'Tests\s+(\d+)\s+passed')
+if (-not $FullTestMatch.Success) { throw "FULL_TEST_PASS_COUNT_NOT_FOUND" }
+$FullTestPassingCount = [int]$FullTestMatch.Groups[1].Value
+if ($FullTestPassingCount -lt 1) { throw "FULL_TEST_PASS_COUNT_INVALID" }
+Write-Host "FULL_TEST_PASSING_COUNT=$FullTestPassingCount"
 & npm.cmd run typecheck
 Require-Exit "TYPECHECK"
 & npm.cmd run build
@@ -272,6 +279,7 @@ $Result = [ordered]@{
     m01_regression = "PASS"
     adversarial_tests = "PASS"
     full_tests = "PASS"
+    full_test_passing_count = $FullTestPassingCount
     typecheck = "PASS"
     build = "PASS"
     port_8768_regression = "PASS"
