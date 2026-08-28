@@ -82,7 +82,7 @@ describe("M06 adversarial authority boundaries", () => {
     const server = await readFile("src/server.ts", "utf8");
     const foundation = await readFile("src/operator/server-foundation.ts", "utf8");
     const protocol = await readFile("src/operator/protocol.ts", "utf8");
-    expect(server).toContain("operatorFoundation?.tools ?? legacyPublicTools()");
+    expect(server).toContain("tools: operatorTools ?? legacyPublicTools()");
     expect(server).not.toContain("transaction-isolation");
     expect(server).not.toContain("local-git");
     expect(foundation).toContain("TOOL_DENIED_INACTIVE_MODE");
