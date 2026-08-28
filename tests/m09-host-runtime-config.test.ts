@@ -110,6 +110,37 @@ describe("M09 host launch config boundary", () => {
     }
   });
 
+  it("rejects accessor-bearing config and project maps without invoking getters", () => {
+    let configReads = 0;
+    const accessorConfig = validConfig();
+    Object.defineProperty(accessorConfig, "port", {
+      enumerable: true,
+      get() { configReads += 1; return 8773; },
+    });
+    expect(() => validateHostOperatorLaunchConfig(accessorConfig)).toThrow("M09_HOST_CONFIG_INVALID");
+    expect(configReads).toBe(0);
+
+    let projectReads = 0;
+    const projects: Record<string, unknown> = {};
+    Object.defineProperty(projects, "demo", {
+      enumerable: true,
+      get() { projectReads += 1; return "C:\\projects\\demo"; },
+    });
+    expect(() => validateHostOperatorLaunchConfig({ ...validConfig(), allowedProjects: projects }))
+      .toThrow("M09_HOST_CONFIG_INVALID");
+    expect(projectReads).toBe(0);
+
+    const throwingProxy = new Proxy(validConfig(), {
+      getPrototypeOf() { throw new Error("SENSITIVE-PROXY-TRAP"); },
+    });
+    expect(() => validateHostOperatorLaunchConfig(throwingProxy)).toThrow("M09_HOST_CONFIG_INVALID");
+    try {
+      validateHostOperatorLaunchConfig(throwingProxy);
+    } catch (error) {
+      expect((error as Error).message).not.toContain("SENSITIVE-PROXY-TRAP");
+    }
+  });
+
   it("accepts only integer ports from 1024 through 65535", () => {
     expect(validateHostOperatorLaunchConfig({ ...validConfig(), port: 1024 }).port).toBe(1024);
     expect(validateHostOperatorLaunchConfig({ ...validConfig(), port: 65535 }).port).toBe(65535);
@@ -162,6 +193,7 @@ describe("M09 host API key file boundary", () => {
       ["leading-space.key", ` ${"l".repeat(16)}`],
       ["trailing-space.key", `${"m".repeat(16)} `],
       ["invalid-utf8.key", Buffer.from([0xff, ...Buffer.from("n".repeat(15))])],
+      ["bom.key", Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from("o".repeat(16))])],
       ["too-many-chars.key", "Ã©".repeat(257)],
     ];
 

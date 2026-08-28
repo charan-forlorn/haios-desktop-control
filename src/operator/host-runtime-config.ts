@@ -1,4 +1,4 @@
-import { lstat, readFile } from "node:fs/promises";
+import { lstat, open } from "node:fs/promises";
 import { win32 } from "node:path";
 import { TextDecoder } from "node:util";
 
@@ -24,8 +24,24 @@ const MAX_PROJECT_ID_LENGTH = 128;
 const FORBIDDEN_PROJECT_IDS = new Set(["__proto__", "prototype", "constructor"]);
 
 function fail(code: string): never { throw new Error(code); }
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && Object.getPrototypeOf(value) === Object.prototype;
+function snapshotPlainDataObject(value: unknown): Record<string, unknown> {
+  try {
+    if (typeof value !== "object" || value === null || Object.getPrototypeOf(value) !== Object.prototype) {
+      fail("M09_HOST_CONFIG_INVALID");
+    }
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    const snapshot: Record<string, unknown> = {};
+    for (const key of Reflect.ownKeys(descriptors)) {
+      if (typeof key !== "string") fail("M09_HOST_CONFIG_INVALID");
+      const descriptor = descriptors[key];
+      if (descriptor === undefined || !("value" in descriptor)) fail("M09_HOST_CONFIG_INVALID");
+      snapshot[key] = descriptor.value;
+    }
+    return snapshot;
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("M09_")) throw error;
+    fail("M09_HOST_CONFIG_INVALID");
+  }
 }
 function isAbsoluteWindowsPath(value: unknown): value is string {
   return typeof value === "string"
@@ -34,53 +50,50 @@ function isAbsoluteWindowsPath(value: unknown): value is string {
 }
 
 export function validateHostOperatorLaunchConfig(value: unknown): HostOperatorLaunchConfig {
-  if (!isPlainObject(value)) fail("M09_HOST_CONFIG_INVALID");
-  const keys = Reflect.ownKeys(value);
+  const config = snapshotPlainDataObject(value);
+  const keys = Object.keys(config);
   if (
-    keys.some((key) => typeof key !== "string" || !CONFIG_KEYS.has(key))
-    || REQUIRED_CONFIG_KEYS.some((key) => !Object.hasOwn(value, key))
+    keys.some((key) => !CONFIG_KEYS.has(key))
+    || REQUIRED_CONFIG_KEYS.some((key) => !Object.hasOwn(config, key))
   ) fail("M09_HOST_CONFIG_INVALID");
 
-  if (!Number.isInteger(value.port) || (value.port as number) < 1024 || (value.port as number) > 65535) {
+  if (!Number.isInteger(config.port) || (config.port as number) < 1024 || (config.port as number) > 65535) {
     fail("M09_PORT_INVALID");
   }
-  if (value.mode !== "READ_ONLY_EMERGENCY" && value.mode !== "ACTIVE") {
+  if (config.mode !== "READ_ONLY_EMERGENCY" && config.mode !== "ACTIVE") {
     fail("M09_HOST_CONFIG_INVALID");
   }
-  if (value.mode === "ACTIVE") {
-    if (!Object.hasOwn(value, "activationScope")) fail("M09_ACTIVE_SCOPE_REQUIRED");
-    if (value.activationScope !== "M09_TEST_ONLY") fail("M09_ACTIVE_SCOPE_NOT_AUTHORIZED");
-  } else if (Object.hasOwn(value, "activationScope")) {
+  if (config.mode === "ACTIVE") {
+    if (!Object.hasOwn(config, "activationScope")) fail("M09_ACTIVE_SCOPE_REQUIRED");
+    if (config.activationScope !== "M09_TEST_ONLY") fail("M09_ACTIVE_SCOPE_NOT_AUTHORIZED");
+  } else if (Object.hasOwn(config, "activationScope")) {
     fail("M09_ACTIVE_SCOPE_NOT_AUTHORIZED");
   }
-  if (!isAbsoluteWindowsPath(value.apiKeyFile) || !isAbsoluteWindowsPath(value.worktreeRoot)) {
+  if (!isAbsoluteWindowsPath(config.apiKeyFile) || !isAbsoluteWindowsPath(config.worktreeRoot)) {
     fail("M09_HOST_CONFIG_INVALID");
   }
-  if (!isPlainObject(value.allowedProjects)) fail("M09_HOST_CONFIG_INVALID");
 
+  const projectInput = snapshotPlainDataObject(config.allowedProjects);
   const allowedProjects: Record<string, string> = {};
-  const projectIds = Reflect.ownKeys(value.allowedProjects);
-  if (projectIds.some((projectId) => typeof projectId !== "string")) {
-    fail("M09_HOST_CONFIG_INVALID");
-  }
-  for (const projectId of projectIds as string[]) {
+  for (const projectId of Object.keys(projectInput)) {
+    const root = projectInput[projectId];
     if (
       projectId.length === 0
       || projectId.length > MAX_PROJECT_ID_LENGTH
       || FORBIDDEN_PROJECT_IDS.has(projectId)
-      || !isAbsoluteWindowsPath(value.allowedProjects[projectId])
+      || !isAbsoluteWindowsPath(root)
     ) fail("M09_HOST_CONFIG_INVALID");
-    allowedProjects[projectId] = value.allowedProjects[projectId];
+    allowedProjects[projectId] = root;
   }
 
   const base: Omit<HostOperatorLaunchConfig, "activationScope"> = {
-    apiKeyFile: value.apiKeyFile,
-    worktreeRoot: value.worktreeRoot,
+    apiKeyFile: config.apiKeyFile,
+    worktreeRoot: config.worktreeRoot,
     allowedProjects: Object.freeze(allowedProjects),
-    port: value.port as number,
-    mode: value.mode,
+    port: config.port as number,
+    mode: config.mode,
   };
-  return value.mode === "ACTIVE"
+  return config.mode === "ACTIVE"
     ? Object.freeze({ ...base, activationScope: "M09_TEST_ONLY" as const })
     : Object.freeze(base);
 }
@@ -88,23 +101,50 @@ export function validateHostOperatorLaunchConfig(value: unknown): HostOperatorLa
 export async function loadHostApiKey(path: string): Promise<string> {
   if (!isAbsoluteWindowsPath(path)) fail("M09_API_KEY_PATH_INVALID");
 
-  let stats;
+  let before;
   try {
-    stats = await lstat(path);
+    before = await lstat(path);
   } catch {
     fail("M09_API_KEY_FILE_INVALID");
   }
-  if (!stats.isFile() || stats.isSymbolicLink() || stats.size < 16 || stats.size > 512) {
+  if (!before.isFile() || before.isSymbolicLink() || before.size < 16 || before.size > 512) {
+    fail("M09_API_KEY_FILE_INVALID");
+  }
+
+  let handle;
+  try {
+    handle = await open(path, "r");
+  } catch {
     fail("M09_API_KEY_FILE_INVALID");
   }
 
   let bytes: Buffer;
   try {
-    bytes = await readFile(path);
-  } catch {
+    const opened = await handle.stat();
+    const sameSnapshot = (left: typeof opened, right: typeof opened) =>
+      left.dev === right.dev
+      && left.ino === right.ino
+      && left.birthtimeMs === right.birthtimeMs
+      && left.size === right.size
+      && left.mtimeMs === right.mtimeMs
+      && left.ctimeMs === right.ctimeMs;
+    if (!opened.isFile() || opened.size < 16 || opened.size > 512 || !sameSnapshot(before, opened)) {
+      fail("M09_API_KEY_FILE_INVALID");
+    }
+    bytes = await handle.readFile();
+    const afterRead = await handle.stat();
+    const current = await lstat(path);
+    if (!current.isFile() || current.isSymbolicLink() || !sameSnapshot(opened, afterRead) || !sameSnapshot(opened, current)) {
+      fail("M09_API_KEY_FILE_INVALID");
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message === "M09_API_KEY_FILE_INVALID") throw error;
     fail("M09_API_KEY_FILE_INVALID");
+  } finally {
+    await handle.close().catch(() => undefined);
   }
-  if (bytes.length !== stats.size || bytes.length < 16 || bytes.length > 512) {
+
+  if (bytes.length !== before.size || bytes.length < 16 || bytes.length > 512 || (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf)) {
     fail("M09_API_KEY_FILE_INVALID");
   }
 
