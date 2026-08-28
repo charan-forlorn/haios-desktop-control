@@ -42,4 +42,5 @@ export interface TransactionRecord {
 export type RollbackPlan =
   | { readonly kind: "create"; readonly path: string; readonly postSha256: string }
   | { readonly kind: "replace"; readonly path: string; readonly preSha256: string; readonly postSha256: string; readonly bundlePath: string }
-  | { readonly kind: "move"; readonly sourcePath: string; readonly destinationPath: string; readonly preSha256: string; readonly postSha256: string; readonly bundlePath: string };
+  | { readonly kind: "move"; readonly sourcePath: string; readonly destinationPath: string; readonly preSha256: string; readonly postSha256: string; readonly bundlePath: string }
+  | { readonly kind: "remove"; readonly path: string; readonly preSha256: string; readonly quarantinePath: string; readonly bundlePath: string };

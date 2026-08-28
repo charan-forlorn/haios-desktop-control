@@ -52,6 +52,15 @@ export class TransactionMutationAdapter {
     await this.#upstream.writeFile({ path, content, mode: "rewrite" });
     return { decision: "ALLOW", preimage: bytes.toString("utf8") };
   }
+  async removeToQuarantine(source: string, destination: string, expectedSha256: string): Promise<MutationAdapterResult> {
+    if (!(await this.#probe.exists(source))) return { decision: "DENY", reason: "SOURCE_MISSING" };
+    if (await this.#probe.exists(destination)) return { decision: "DENY", reason: "DESTINATION_EXISTS" };
+    const bytes = await this.#probe.read(source);
+    if (sha256Bytes(bytes) !== expectedSha256) return { decision: "DENY", reason: "PREIMAGE_MISMATCH" };
+    await this.#upstream.moveFile({ source, destination });
+    return { decision: "ALLOW", preimage: bytes.toString("utf8") };
+  }
+
   async move(source: string, destination: string): Promise<MutationAdapterResult> {
     if (!(await this.#probe.exists(source))) return { decision: "DENY", reason: "SOURCE_MISSING" };
     if (await this.#probe.exists(destination)) return { decision: "DENY", reason: "DESTINATION_EXISTS" };

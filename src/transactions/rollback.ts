@@ -20,6 +20,16 @@ export async function rollbackPlans(
 ): Promise<RollbackResult> {
   try {
     for (const plan of [...plans].reverse()) {
+      if (plan.kind === "remove") {
+        const sourceHash = await currentHash(probe, plan.path);
+        const quarantineHash = await currentHash(probe, plan.quarantinePath);
+        if (sourceHash === plan.preSha256 && quarantineHash === null) continue;
+        if (sourceHash !== null || quarantineHash !== plan.preSha256) {
+          return { decision: "DENY", reason: "ROLLBACK_CONFLICT" };
+        }
+        await rename(plan.quarantinePath, plan.path);
+        continue;
+      }
       if (plan.kind === "create") {
         const hash = await currentHash(probe, plan.path);
         if (hash === null) continue;

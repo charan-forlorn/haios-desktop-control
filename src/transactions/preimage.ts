@@ -22,17 +22,26 @@ export class RollbackBundleStore {
     this.#transactionId = transactionId;
   }
 
+  #pathDigest(sourcePath: string): string {
+    return createHash("sha256").update(sourcePath.toLowerCase(), "utf8").digest("hex");
+  }
+
   async capture(sourcePath: string, bytes: Buffer): Promise<RollbackBundleRecord> {
     const directory = join(this.#root, this.#transactionId);
     await mkdir(directory, { recursive: true });
-    const pathDigest = createHash("sha256").update(sourcePath.toLowerCase(), "utf8").digest("hex");
-    const bundlePath = join(directory, `${pathDigest}.bin`);
+    const bundlePath = join(directory, `${this.#pathDigest(sourcePath)}.bin`);
     await writeFile(bundlePath, bytes, { flag: "wx" });
     return Object.freeze({
       sourcePath,
       sha256: digest(bytes),
       bundlePath,
     });
+  }
+
+  async prepareQuarantine(sourcePath: string): Promise<string> {
+    const directory = join(this.#root, this.#transactionId, "quarantine");
+    await mkdir(directory, { recursive: true });
+    return join(directory, `${this.#pathDigest(sourcePath)}.bin`);
   }
 
   read(bundlePath: string): Promise<Buffer> {
