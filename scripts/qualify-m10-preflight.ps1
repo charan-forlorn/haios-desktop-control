@@ -97,6 +97,23 @@ function Write-Manifest([string]$Path) {
   $text=(@(Get-ManifestLines)-join "`n")+"`n"
   [IO.File]::WriteAllText($Path,$text,[Text.UTF8Encoding]::new($false))
   Get-Sha256 $Path
+}function Get-ManifestDigestAt([string]$RepoRoot) {
+  $paths=[string[]]@(& git.exe -C $RepoRoot ls-files); Require-Exit "M10_DEPLOYMENT_PROOF_ENUM"
+  [Array]::Sort($paths,[StringComparer]::Ordinal)
+  $lines=foreach($rel in $paths){"$(Get-Sha256 (Join-Path $RepoRoot $rel))  $($rel.Replace('\','/'))"}
+  $text=($lines -join "`n")+"`n"; $bytes=[Text.Encoding]::UTF8.GetBytes($text)
+  [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant()
+}
+function Materialize-SealedTrackedBytesAt([string]$SourceRoot,[string]$TargetRoot) {
+  $paths=[string[]]@(& git.exe -C $SourceRoot ls-files); Require-Exit "M10_DEPLOYMENT_PROOF_SOURCE_ENUM"
+  [Array]::Sort($paths,[StringComparer]::Ordinal)
+  foreach($rel in $paths){
+    $src=Join-Path $SourceRoot $rel; $dst=Join-Path $TargetRoot $rel
+    if(-not(Test-Path -LiteralPath $src -PathType Leaf)){throw "M10_DEPLOYMENT_PROOF_SOURCE_MEMBER_MISSING:$rel"}
+    $parent=Split-Path -Parent $dst
+    if($parent -and -not(Test-Path -LiteralPath $parent)){New-Item -ItemType Directory -Force -Path $parent|Out-Null}
+    Copy-Item -LiteralPath $src -Destination $dst -Force
+  }
 }
 if ((git status --porcelain).Length -ne 0) { throw "WORKTREE_NOT_CLEAN" }
 $Head=(git rev-parse HEAD).Trim(); $Branch=(git branch --show-current).Trim()
@@ -187,7 +204,39 @@ $ManifestPath=Join-Path $EvidenceRoot "source-manifest.txt"
 $ManifestDigest=Write-Manifest $ManifestPath
 Write-Host "SOURCE_MANIFEST_DIGEST=$ManifestDigest"
 
-Write-Host "[4] Non-live production preflight"
+Write-Host "[4] Independent deployment byte reproducibility proof"
+$ProofRoot=Join-Path $Root "runtime\m10-deployment-proof-$RunId"
+if(Test-Path -LiteralPath $ProofRoot){throw "M10_DEPLOYMENT_PROOF_ROOT_COLLISION"}
+try{
+  & git.exe -C $Root worktree add --detach $ProofRoot $Head; Require-Exit "M10_DEPLOYMENT_PROOF_WORKTREE_CREATE"
+  $FreshCheckoutManifest=Get-ManifestDigestAt $ProofRoot
+  Materialize-SealedTrackedBytesAt $Root $ProofRoot
+  & git.exe -C $ProofRoot add -u; Require-Exit "M10_DEPLOYMENT_PROOF_INDEX_REFRESH"
+  & git.exe -C $ProofRoot diff --cached --quiet
+  if($LASTEXITCODE -ne 0){throw "M10_DEPLOYMENT_PROOF_INDEX_DRIFT"}
+  & git.exe -C $ProofRoot diff --quiet
+  if($LASTEXITCODE -ne 0){throw "M10_DEPLOYMENT_PROOF_WORKTREE_DRIFT"}
+  if((& git.exe -C $ProofRoot status --porcelain).Length -ne 0){throw "M10_DEPLOYMENT_PROOF_WORKTREE_DRIFT"}
+  $ProofManifest=Get-ManifestDigestAt $ProofRoot
+  if($ProofManifest -ne $ManifestDigest){throw "M10_DEPLOYMENT_PROOF_MANIFEST_DRIFT"}
+  $Proof=[ordered]@{
+    head=$Head;source_manifest_sha256=$ManifestDigest;fresh_checkout_manifest_sha256=$FreshCheckoutManifest
+    fresh_checkout_matches_source=($FreshCheckoutManifest -eq $ManifestDigest)
+    materialized_manifest_sha256=$ProofManifest;materialized_matches_source=$true
+    index_diff=$false;worktree_diff=$false;git_clean=$true
+    terminal="M10_DEPLOYMENT_BYTE_REPRODUCIBILITY_PASS"
+  }
+  Write-JsonNoBom (Join-Path $EvidenceRoot "m10-deployment-byte-reproducibility.json") $Proof
+  Write-Host "M10_DEPLOYMENT_BYTE_REPRODUCIBILITY_PASS"
+}finally{
+  if(Test-Path -LiteralPath $ProofRoot){
+    & git.exe -C $Root worktree remove --force $ProofRoot *> $null
+    if($LASTEXITCODE -ne 0){throw "M10_DEPLOYMENT_PROOF_CLEANUP_FAILED"}
+  }
+}
+if(Test-Path -LiteralPath $ProofRoot){throw "M10_DEPLOYMENT_PROOF_RESIDUE"}
+
+Write-Host "[5] Non-live production preflight"
 & pwsh -NoProfile -File $PreflightPath -EvidenceRoot $PreflightRelative -Mode Fixture
 Require-Exit "M10_NON_LIVE_PREFLIGHT"
 $PreflightRoot=Join-Path $EvidenceRoot "preflight"
@@ -201,7 +250,7 @@ if([string]$Preimage.operator_compose_sha256 -ne $OperatorComposeSha){throw "M10
 if([string]$Preimage.dedicated_compose_sha256 -ne $DedicatedComposeSha){throw "M10_DEDICATED_COMPOSE_PREIMAGE_DRIFT"}
 if([bool]$Preimage.scheduled_task_present){throw "M10_TASK_COLLISION"}
 
-Write-Host "[5] Disposable READ_ONLY_EMERGENCY direct + dev-proxy parity"
+Write-Host "[6] Disposable READ_ONLY_EMERGENCY direct + dev-proxy parity"
 New-Item -ItemType Directory -Force $RuntimeRoot|Out-Null
 $ParityResult=Join-Path $EvidenceRoot "m10-readonly-parity-result.json"
 & node.exe (Join-Path $Root "scripts\live-m10-readonly-parity.mjs") $RuntimeRoot $ParityResult $DirectPort $ProxyPort

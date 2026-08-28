@@ -82,6 +82,38 @@ describe("M10 sealed cutover transaction contract", () => {
     expect(host).toBeLessThan(tunnel);
   });
 
+  it("materializes sealed source bytes into the deployment worktree before manifest verification", async () => {
+    const source = await readFile(executePath, "utf8");
+    for (const marker of [
+      "Materialize-SealedTrackedBytes",
+      "M10_DEPLOYMENT_INDEX_REFRESH_FAILED",
+      "M10_DEPLOYMENT_INDEX_DRIFT",
+      "M10_DEPLOYMENT_WORKTREE_DRIFT",
+      "M10_DEPLOYMENT_WORKTREE_DIRTY",
+      "M10_DEPLOYMENT_SOURCE_CURRENTNESS_DRIFT",
+      "M10_DEPLOYMENT_MANIFEST_DRIFT",
+    ]) expect(source).toContain(marker);
+    const add = source.indexOf("worktree add --detach");
+    const materialize = source.indexOf("Materialize-SealedTrackedBytes $Root $DeploymentRoot");
+    const sourceCurrent = source.indexOf("M10_DEPLOYMENT_SOURCE_CURRENTNESS_DRIFT");
+    const deploymentCurrent = source.indexOf("M10_DEPLOYMENT_MANIFEST_DRIFT");
+    expect(add).toBeLessThan(materialize);
+    expect(materialize).toBeLessThan(sourceCurrent);
+    expect(sourceCurrent).toBeLessThan(deploymentCurrent);
+  });
+  it("uses functional readiness for the recreated dedicated tunnel instead of Docker health alone", async () => {
+    const source = await readFile(executePath, "utf8");
+    for (const marker of [
+      "Wait-TunnelFunctionalReady",
+      "M10_DEDICATED_TUNNEL_FUNCTIONAL_READINESS_TIMEOUT",
+      "control_plane_poll_recent",
+      "host.docker.internal:8769/healthz",
+    ]) expect(source).toContain(marker);
+    const switchCall = source.indexOf("operator-dedicated-tunnel-client");
+    const functional = source.lastIndexOf("Wait-TunnelFunctionalReady");
+    expect(functional).toBeGreaterThan(switchCall);
+    expect(source).not.toContain("Wait-ContainerHealthy $DedicatedContainer 60");
+  });
   it("binds rollback to exact preimages and refuses ambiguous drift", async () => {
     const source = await readFile(rollbackPath, "utf8");
     for (const marker of [

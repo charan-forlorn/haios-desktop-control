@@ -43,6 +43,18 @@ function Get-ManifestDigest([string]$RepoRoot) {
   $text=($lines -join "`n")+"`n"; $bytes=[Text.Encoding]::UTF8.GetBytes($text)
   [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant()
 }
+function Materialize-SealedTrackedBytes([string]$SourceRoot,[string]$TargetRoot) {
+  $paths=[string[]]@(& git.exe -C $SourceRoot ls-files)
+  if($LASTEXITCODE -ne 0){throw "M10_DEPLOYMENT_SOURCE_ENUM_FAILED"}
+  [Array]::Sort($paths,[StringComparer]::Ordinal)
+  foreach($rel in $paths){
+    $src=Join-Path $SourceRoot $rel; $dst=Join-Path $TargetRoot $rel
+    if(-not(Test-Path -LiteralPath $src -PathType Leaf)){throw "M10_DEPLOYMENT_SOURCE_MEMBER_MISSING:$rel"}
+    $parent=Split-Path -Parent $dst
+    if($parent -and -not(Test-Path -LiteralPath $parent)){New-Item -ItemType Directory -Force -Path $parent | Out-Null}
+    Copy-Item -LiteralPath $src -Destination $dst -Force
+  }
+}
 $DecisionEnvelope=[IO.Path]::GetFullPath($DecisionEnvelope)
 $EvidenceRoot=[IO.Path]::GetFullPath($EvidenceRoot)
 if(-not(Test-Path -LiteralPath $DecisionEnvelope)){throw "M10_CUTOVER_AUTHORITY_CURRENTNESS_FAILED:DECISION_MISSING"}
@@ -117,6 +129,53 @@ try{
     }while([DateTime]::UtcNow -lt $deadline)
     throw "M10_CONTAINER_HEALTH_TIMEOUT:$Name"
   }
+  function Test-ContainerHttpGet([string]$Name,[string]$Url){
+    $previous=$ErrorActionPreference
+    try{
+      $ErrorActionPreference='Continue'
+      & docker.exe exec $Name sh -c "wget -T 3 -qO- '$Url' >/dev/null" *> $null
+      return $LASTEXITCODE -eq 0
+    }finally{$ErrorActionPreference=$previous}
+  }
+  function Get-TunnelFunctionalReadinessSnapshot([string]$Name,[int]$HealthPort,[string]$BackendHealthUrl){
+    $state=(& docker.exe inspect --format '{{.State.Status}}' $Name 2>$null).Trim()
+    if($LASTEXITCODE -ne 0 -or -not $state){throw "M10_TUNNEL_STATE_UNAVAILABLE:$Name"}
+    $dockerHealth=(& docker.exe inspect --format '{{.State.Health.Status}}' $Name 2>$null).Trim()
+    if($LASTEXITCODE -ne 0 -or -not $dockerHealth){$dockerHealth='unknown'}
+    $healthzPass=Test-ContainerHttpGet $Name "http://127.0.0.1:$HealthPort/healthz"
+    $backendReachable=Test-ContainerHttpGet $Name $BackendHealthUrl
+    $metrics=$null
+    $previous=$ErrorActionPreference
+    try{
+      $ErrorActionPreference='Continue'
+      $metrics=& docker.exe exec $Name sh -c "wget -T 3 -qO- http://127.0.0.1:$HealthPort/metrics" 2>$null
+      $metricsOk=$LASTEXITCODE -eq 0 -and [bool]$metrics
+    }finally{$ErrorActionPreference=$previous}
+    $pollRecent=$false; $pollAge=$null
+    if($metricsOk){
+      $match=[regex]::Match(($metrics -join "`n"),'commands_poll_last_successful_timestamp_seconds\{[^}]*\}\s+([0-9.eE+\-]+)')
+      if($match.Success){
+        $poll=[double]::Parse($match.Groups[1].Value,[Globalization.CultureInfo]::InvariantCulture)
+        $pollAge=[Math]::Max(0,[DateTimeOffset]::UtcNow.ToUnixTimeSeconds()-[int64][Math]::Floor($poll))
+        $pollRecent=$pollAge -le 120
+      }
+    }
+    [ordered]@{
+      name=$Name;container_running=($state -eq 'running');docker_health_observation=$dockerHealth
+      healthz_pass=$healthzPass;backend_reachable=$backendReachable
+      control_plane_poll_recent=$pollRecent;control_plane_poll_age_seconds=$pollAge
+      functional_ready=($state -eq 'running' -and $healthzPass -and $backendReachable -and $pollRecent)
+    }
+  }
+  function Wait-TunnelFunctionalReady([string]$Name,[int]$HealthPort,[string]$BackendHealthUrl,[int]$Seconds=60){
+    $deadline=[DateTime]::UtcNow.AddSeconds($Seconds); $snapshot=$null
+    do{
+      Start-Sleep -Milliseconds 500
+      $snapshot=Get-TunnelFunctionalReadinessSnapshot $Name $HealthPort $BackendHealthUrl
+      if([bool]$snapshot.functional_ready){return $snapshot}
+    }while([DateTime]::UtcNow -lt $deadline)
+    throw "M10_DEDICATED_TUNNEL_FUNCTIONAL_READINESS_TIMEOUT"
+  }
 
   $OperatorOverride=Join-Path $EvidenceRoot "operator-live.override.yml"
   @'
@@ -132,6 +191,15 @@ services:
 
   & git.exe -C $Root worktree add --detach $DeploymentRoot ([string]$Envelope.candidate_head)
   if($LASTEXITCODE -ne 0){throw "M10_DEPLOYMENT_WORKTREE_CREATE_FAILED"}
+  Materialize-SealedTrackedBytes $Root $DeploymentRoot
+  & git.exe -C $DeploymentRoot add -u
+  if($LASTEXITCODE -ne 0){throw "M10_DEPLOYMENT_INDEX_REFRESH_FAILED"}
+  & git.exe -C $DeploymentRoot diff --cached --quiet
+  if($LASTEXITCODE -ne 0){throw "M10_DEPLOYMENT_INDEX_DRIFT"}
+  & git.exe -C $DeploymentRoot diff --quiet
+  if($LASTEXITCODE -ne 0){throw "M10_DEPLOYMENT_WORKTREE_DRIFT"}
+  if((& git.exe -C $DeploymentRoot status --porcelain).Length -ne 0){throw "M10_DEPLOYMENT_WORKTREE_DIRTY"}
+  if((Get-ManifestDigest $Root) -ne [string]$Envelope.candidate_manifest_sha256){throw "M10_DEPLOYMENT_SOURCE_CURRENTNESS_DRIFT"}
   if((Get-ManifestDigest $DeploymentRoot) -ne [string]$Envelope.candidate_manifest_sha256){throw "M10_DEPLOYMENT_MANIFEST_DRIFT"}
   Push-Location $DeploymentRoot
   try{
@@ -215,7 +283,8 @@ services:
   [IO.File]::WriteAllText($DedicatedOverride,(($lines -join "`n")+"`n"),[Text.UTF8Encoding]::new($false))
   & docker.exe compose -p haios-operator-dedicated-tunnel -f $DedicatedCompose -f $DedicatedOverride up -d --no-deps --no-build --force-recreate operator-dedicated-tunnel-client
   if($LASTEXITCODE -ne 0){throw "M10_DEDICATED_TUNNEL_SWITCH_FAILED"}
-  Wait-ContainerHealthy $DedicatedContainer 60
+  $DedicatedReadiness=Wait-TunnelFunctionalReady $DedicatedContainer 8079 "http://host.docker.internal:8769/healthz" 60
+  Write-JsonNoBom (Join-Path $EvidenceRoot "dedicated-tunnel-functional-readiness.json") $DedicatedReadiness
   Remove-Item Env:HAIOS_OPERATOR_TUNNEL_RUNTIME_KEY_FILE -ErrorAction SilentlyContinue
   $dedicatedPost=(& docker.exe inspect $DedicatedContainer | ConvertFrom-Json)[0]
   if(-not ((@($dedicatedPost.Args)-join ' ').Contains("host.docker.internal:8769/mcp"))){throw "M10_DEDICATED_ROUTE_POSTCHECK_FAILED"}

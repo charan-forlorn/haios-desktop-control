@@ -45,6 +45,16 @@ describe("M10 adversarial pre-live boundary", () => {
     expect(source).not.toContain('$SharedTunnelHealth -ne "healthy" -or $DedicatedTunnelHealth -ne "healthy"');
   });
 
+  it("independently proves deployment byte reproducibility before sealing Human authority", async () => {
+    const source = await readFile(qualifierPath, "utf8");
+    for (const marker of [
+      "m10-deployment-byte-reproducibility.json",
+      "M10_DEPLOYMENT_PROOF_MANIFEST_DRIFT",
+      "M10_DEPLOYMENT_PROOF_INDEX_DRIFT",
+      "M10_DEPLOYMENT_PROOF_WORKTREE_DRIFT",
+      "M10_DEPLOYMENT_BYTE_REPRODUCIBILITY_PASS",
+    ]) expect(source).toContain(marker);
+  });
   it("seals exact executor, rollback, preflight, live verifier, manifest and Human decision", async () => {
     const source = await readFile(qualifierPath, "utf8");
     for (const marker of [
