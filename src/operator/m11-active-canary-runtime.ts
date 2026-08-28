@@ -56,7 +56,7 @@ function runtimeIdentityPaths() {
     const registryPath = join(root, "task-registry.m07.json");
     const effectPolicyPath = join(root, "task-effects.m07.json");
     if (existsSync(registryPath) && existsSync(effectPolicyPath)) {
-      return Object.freeze({ registryPath, effectPolicyPath });
+      return Object.freeze({ root, registryPath, effectPolicyPath });
     }
   }
   throw new Error("M11_ACTIVE_CANARY_RUNTIME_IDENTITY_FILES_NOT_FOUND");
@@ -112,6 +112,97 @@ export async function createM11ActiveCanaryRuntime(config: unknown): Promise<Gat
   const [apiKey, operatorRuntime] = await Promise.all([
     loadM11ActiveCanaryApiKey(validated.apiKeyFile),
     createQualifiedRuntime(validated),
+  ]);
+  return createGatewayServer({
+    apiKey,
+    upstream: noAuthorityUpstream(),
+    protocolMode: "operator13",
+    operatorMode: "ACTIVE",
+    operatorRuntime,
+    host: "127.0.0.1",
+    port: validated.port,
+  });
+}
+
+export interface M11DisposableFixtureConfig {
+  readonly apiKeyFile: string;
+  readonly worktreeRoot: string;
+  readonly canonicalRoot: string;
+  readonly projectId: "m11-fixture";
+  readonly port: number;
+  readonly mode: "ACTIVE";
+  readonly activationScope: "M11_DISPOSABLE_FIXTURE_ONLY";
+}
+
+const FIXTURE_KEYS = new Set([
+  "apiKeyFile", "worktreeRoot", "canonicalRoot", "projectId",
+  "port", "mode", "activationScope",
+]);
+
+function fixtureDeny(): never {
+  throw new Error("M11_DISPOSABLE_FIXTURE_CONFIG_DENIED");
+}
+
+function fixtureObject(value: unknown): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Object.getPrototypeOf(value) !== Object.prototype) fixtureDeny();
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  const out: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+  for (const key of Reflect.ownKeys(descriptors)) {
+    if (typeof key !== "string") fixtureDeny();
+    const descriptor = descriptors[key];
+    if (descriptor === undefined || !("value" in descriptor)) fixtureDeny();
+    out[key] = descriptor.value;
+  }
+  return out;
+}
+function validateDisposableFixtureConfig(value: unknown): M11DisposableFixtureConfig {
+  const config = fixtureObject(value);
+  const keys = Object.keys(config);
+  const paths = runtimeIdentityPaths();
+  const fixtureBase = resolve(paths.root, "runtime", "m11-fixture");
+  const prefix = `${fixtureBase.toLowerCase()}\\`;
+  const underFixture = (candidate: unknown) => typeof candidate === "string"
+    && resolve(candidate).toLowerCase().startsWith(prefix);
+
+  if (
+    keys.length !== FIXTURE_KEYS.size
+    || keys.some((key) => !FIXTURE_KEYS.has(key))
+    || !underFixture(config.apiKeyFile)
+    || !underFixture(config.worktreeRoot)
+    || !underFixture(config.canonicalRoot)
+    || config.projectId !== "m11-fixture"
+    || config.mode !== "ACTIVE"
+    || config.activationScope !== "M11_DISPOSABLE_FIXTURE_ONLY"
+    || typeof config.port !== "number"
+    || !Number.isInteger(config.port)
+    || config.port < 1024
+    || config.port > 65535
+    || config.port === 8768
+    || config.port === 8769
+    || resolve(config.worktreeRoot as string) === resolve(config.canonicalRoot as string)
+  ) fixtureDeny();
+
+  return Object.freeze({
+    apiKeyFile: config.apiKeyFile as string,
+    worktreeRoot: config.worktreeRoot as string,
+    canonicalRoot: config.canonicalRoot as string,
+    projectId: "m11-fixture" as const,
+    port: config.port as number,
+    mode: "ACTIVE" as const,
+    activationScope: "M11_DISPOSABLE_FIXTURE_ONLY" as const,
+  });
+}
+export async function createM11DisposableFixtureRuntime(config: unknown): Promise<GatewayRuntime> {
+  const validated = validateDisposableFixtureConfig(config);
+  const paths = runtimeIdentityPaths();
+  const [apiKey, operatorRuntime] = await Promise.all([
+    loadM11ActiveCanaryApiKey(validated.apiKeyFile),
+    createQualifiedOperatorControlRuntime({
+      worktreeRoot: validated.worktreeRoot,
+      allowedProjects: Object.freeze({ [validated.projectId]: validated.canonicalRoot }),
+      registryPath: paths.registryPath,
+      effectPolicyPath: paths.effectPolicyPath,
+    }),
   ]);
   return createGatewayServer({
     apiKey,

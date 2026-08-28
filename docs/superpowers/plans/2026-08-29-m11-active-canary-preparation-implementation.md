@@ -67,6 +67,8 @@
 - [ ] Commit `feat: add sealed m11 activation rollback transaction`.
 ### Task 4: Disposable ACTIVE end-to-end qualification
 **Files:**
+- Modify: `src/operator/m11-active-canary-runtime.ts`
+- Create: `scripts/live-m11-disposable-active.mjs`
 - Create: `tests/m11-disposable-active.test.ts`
 - Create: `scripts/qualify-m11-active-canary.ps1`
 
