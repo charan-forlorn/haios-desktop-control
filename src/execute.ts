@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { authorizeTool } from "./policy.js";
 import { resolveExecutionProfile } from "./execute-profiles.js";
 import type {
@@ -27,6 +29,8 @@ export type ExecuteDispatchResult =
       readonly exitCode: 0;
       readonly output: string;
       readonly truncated: boolean;
+      readonly preStateDigest: string;
+      readonly postStateDigest: string;
     }
   | {
       readonly decision: "DENY";
@@ -119,6 +123,10 @@ async function captureTrackedState(
   if (result.status !== "COMPLETE" || result.exitCode !== 0) return null;
   return extractTrackedState(result.output);
 }
+function digestState(state: string): string {
+  return createHash("sha256").update(state, "utf8").digest("hex");
+}
+
 function boundOutput(output: string): { output: string; truncated: boolean } {
   const bytes = Buffer.from(output, "utf8");
   if (bytes.byteLength <= MAX_OUTPUT_BYTES) {
@@ -182,5 +190,7 @@ export async function dispatchExecuteTool(
     exitCode: 0,
     output: bounded.output,
     truncated: bounded.truncated,
+    preStateDigest: digestState(preState),
+    postStateDigest: digestState(postState),
   };
 }

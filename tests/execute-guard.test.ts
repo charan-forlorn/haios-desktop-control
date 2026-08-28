@@ -61,6 +61,9 @@ describe("M02 execute guard", () => {
     ]);
     const result = await dispatchExecuteTool("project_test", {}, { upstream });
     expect(result).toMatchObject({ decision: "ALLOW", exitCode: 0, truncated: false });
+    if (result.decision !== "ALLOW") throw new Error("expected allow");
+    expect(result.preStateDigest).toMatch(/^[a-f0-9]{64}$/);
+    expect(result.postStateDigest).toBe(result.preStateDigest);
     expect(JSON.stringify(result)).toContain("TEST_OK");
     expect(upstream.starts).toHaveLength(3);
     expect(upstream.kills).toEqual([]);
