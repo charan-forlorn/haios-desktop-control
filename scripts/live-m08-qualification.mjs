@@ -1,4 +1,4 @@
-﻿import { createHash } from "node:crypto";
+import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
@@ -8,13 +8,8 @@ import { promisify } from "node:util";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
-import { createOperatorControlRuntime } from "../dist/src/operator/control-runtime.js";
 import { LocalOperatorGit } from "../dist/src/operator/local-git.js";
-import { SandboxExecutor } from "../dist/src/operator/sandbox-executor.js";
-import { loadTaskRegistryV2 } from "../dist/src/operator/task-contract-v2.js";
-import { loadTaskEffectPolicy } from "../dist/src/operator/task-effects.js";
-import { OperatorTaskRunner } from "../dist/src/operator/task-runner.js";
-import { OperatorTransactionService } from "../dist/src/operator/transaction-isolation.js";
+import { createQualifiedOperatorControlRuntime } from "../dist/src/operator/qualified-control-runtime.js";
 import { createGatewayServer } from "../dist/src/server.js";
 
 const run = promisify(execFile);
@@ -55,16 +50,11 @@ await gitExec(["add", "-A"]);
 await gitExec(["-c", "user.email=haios-m08@local", "-c", "user.name=HAIOS M08", "commit", "-m", "baseline"]);
 
 const git = new LocalOperatorGit();
-const transactions = new OperatorTransactionService({ worktreeRoot, allowedProjects: { demo: canonical }, git });
-const registry = await loadTaskRegistryV2(join(repoRoot, "task-registry.m07.json"));
-const effects = await loadTaskEffectPolicy(join(repoRoot, "task-effects.m07.json"));
-const sandbox = new SandboxExecutor();
-const tasks = new OperatorTaskRunner({
-  transactions, git, registry, effects,
-  qualifiedEffectPolicySha256: effects.sha256,
-  sandbox, safeEnvironment: { CI: "1" },
+const operatorRuntime = await createQualifiedOperatorControlRuntime({
+  worktreeRoot, allowedProjects: { demo: canonical },
+  registryPath: join(repoRoot, "task-registry.m07.json"),
+  effectPolicyPath: join(repoRoot, "task-effects.m07.json"),
 });
-const operatorRuntime = createOperatorControlRuntime({ transactions, tasks, registry, effects });
 const upstream = {
   listDirectory: async () => ({}), readFile: async () => ({}), readMultipleFiles: async () => ({}),
   getFileInfo: async () => ({}), startSearch: async () => ({}), getMoreSearchResults: async () => ({}),

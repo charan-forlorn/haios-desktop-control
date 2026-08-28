@@ -12,6 +12,9 @@ $M07CertPath = "C:\Workspace\haios-desktop-control-m07\evidence\m07\20260828T102
 $M07CertShaExpected = "a6b58a86a4d60b5ee71dbab4672ad89c16ab5b3f30392d04eec8c03253e12533"
 $M07Terminal = "HAIOS_DESKTOP_CONTROL_PLANE_R1_M07_BOUNDED_TASK_RUNNER_QUALIFIED"
 $Image = "haios-operator-sandbox-node@sha256:4c1909633b4c7c6e8dfce3e7994bacaf81ac30808a055d4ba790e9b7c366dcfe"
+$QualifiedRuntimeProfile = "M08_M06_M07_QUALIFIED_RUNTIME_V1"
+$QualifiedRegistrySha = "e94aaa6e60534316736a958c80bd33db691b2494b1518391a15d9f90f1e7e72c"
+$QualifiedEffectsSha = "00dfb27757d629e09bf2f91c4247004ecd1162bdd7e14faee88c1a777b2e5335"
 New-Item -ItemType Directory -Force $EvidenceRoot,$RuntimeRoot | Out-Null
 function Require-Exit([string]$Name) { if ($LASTEXITCODE -ne 0) { throw "$Name failed with exit $LASTEXITCODE" } }
 function Test-Port([int]$PortNumber) { return [bool](Get-NetTCPConnection -State Listen -LocalPort $PortNumber -ErrorAction SilentlyContinue) }
@@ -54,11 +57,14 @@ if((Get-M07ContainerResidue).Count -ne 0 -or (Get-M07NetworkResidue).Count -ne 0
 $ImageInspect=(& docker.exe image inspect $Image | ConvertFrom-Json)[0]; Require-Exit "M08_PINNED_IMAGE_INSPECT"
 if($ImageInspect.Id -ne "sha256:4c1909633b4c7c6e8dfce3e7994bacaf81ac30808a055d4ba790e9b7c366dcfe"){throw "M08_IMAGE_ID_DRIFT"}
 $RegistrySha=Get-Sha256 (Join-Path $Root "task-registry.m07.json"); $EffectsSha=Get-Sha256 (Join-Path $Root "task-effects.m07.json")
+if($RegistrySha -ne $QualifiedRegistrySha){throw "M08_QUALIFIED_REGISTRY_IDENTITY_DRIFT"}
+if($EffectsSha -ne $QualifiedEffectsSha){throw "M08_QUALIFIED_EFFECT_POLICY_IDENTITY_DRIFT"}
+Write-Host "M08_QUALIFIED_RUNTIME_PROVENANCE=PASS"
 Write-Host "M08_RUN_ID=$RunId"; Write-Host "HEAD=$Head"; Write-Host "BRANCH=$Branch"; Write-Host "REGISTRY_SHA256=$RegistrySha"; Write-Host "EFFECT_POLICY_SHA256=$EffectsSha"
 
 Write-Host "[1] M08 focused + adversarial qualification"
 $AdversarialLog=Join-Path $EvidenceRoot "m08-adversarial.log"
-& npm.cmd test -- tests/m08-adversarial.test.ts tests/m08-live-helper.test.ts tests/m08-operator-runtime.test.ts tests/m08-operator-server.test.ts tests/m05-operator-server.test.ts tests/m06-adversarial.test.ts tests/m07-adversarial.test.ts 2>&1 | Tee-Object -FilePath $AdversarialLog
+& npm.cmd test -- tests/m08-adversarial.test.ts tests/m08-runtime-provenance.test.ts tests/m08-live-helper.test.ts tests/m08-operator-runtime.test.ts tests/m08-operator-server.test.ts tests/m05-operator-server.test.ts tests/m06-adversarial.test.ts tests/m07-adversarial.test.ts 2>&1 | Tee-Object -FilePath $AdversarialLog
 Require-Exit "M08_ADVERSARIAL_TESTS"; Write-Host "M08_ADVERSARIAL_TESTS=PASS"
 
 Write-Host "[2] One final full regression on frozen committed bytes"
@@ -107,14 +113,14 @@ $Result=[ordered]@{
   docker_image=$Image; docker_image_id=$ImageInspect.Id; adversarial_tests="PASS"; full_tests="PASS"; full_test_passing_count=$FullTestPassingCount; typecheck="PASS"; build="PASS"
   live_exact_13_tools=$true; live_active_status=$true; live_task=$true; live_promotion=$true; live_rollback=$true; live_stale_cas_denial=$true; canonical_unchanged_before_promotion=$true
   worktree_residue=0; docker_container_residue=0; docker_network_residue=0; runtime_residue=0; unauthorized_mutations=0; secrets_persisted=$false
-  tunnel_integrity=@($TunnelEvidence); tunnel_modified=$false; long_lived_operator_mode="READ_ONLY_EMERGENCY"; disposable_active_operator_qualified=$true; production_operator_runtime_changed=$false
+  tunnel_integrity=@($TunnelEvidence); tunnel_modified=$false; long_lived_operator_mode="READ_ONLY_EMERGENCY"; disposable_active_operator_qualified=$true; qualified_runtime_provenance=$true; qualified_runtime_profile=$QualifiedRuntimeProfile; production_operator_runtime_changed=$false
   s2_enabled=$false; destructive_capability="LOCKED"; production_dogfood_activated=$false; independent_verification="PENDING"
   terminal="HAIOS_DESKTOP_CONTROL_PLANE_R1_M08_READY_FOR_INDEPENDENT_VERIFICATION"
 }
 $ResultPath=Join-Path $EvidenceRoot "m08-qualification-result.json"; [IO.File]::WriteAllText($ResultPath, (($Result | ConvertTo-Json -Depth 10) + "`n"), [Text.UTF8Encoding]::new($false))
 $Handoff=[ordered]@{
   mission=$Result.mission; run_id=$RunId; head=$Head; source_manifest_digest=$ManifestDigest; review_mode="READ_ONLY_INDEPENDENT"; rerun_unchanged_tests=$false
-  required_checks=@("HEAD_MATCH","MANIFEST_MATCH","M07_CERTIFICATION_BOUND","EXACT_13_TOOL_SURFACE","EXPLICIT_ACTIVE_RUNTIME_GATE","INACTIVE_MODE_UNCHANGED","LEGACY27_UNCHANGED","SERVER_BOUND_REGISTRY_DIGEST","M06_TRANSACTION_ISOLATION","M07_TASK_RUNNER_BINDING","PUBLIC_INPUT_EXACT_KEYS","NO_GENERIC_EXEC_AUTHORITY","NO_REMOTE_GIT_AUTHORITY","S2_DISABLED","DESTRUCTIVE_LOCKED","CANONICAL_UNCHANGED_BEFORE_PROMOTION","LOCAL_CHECKPOINT_ONLY","CAS_PROMOTION","ROLLBACK_CLEANUP","STALE_CAS_FAIL_CLOSED","TASK_FAILURE_FAIL_CLOSED","EFFECT_POLICY_FAIL_CLOSED","TUNNEL_INTEGRITY","LONG_LIVED_RUNTIME_UNCHANGED","ZERO_RESIDUE","SECRETS_PERSISTED_FALSE","DOGFOOD_NOT_ACTIVATED")
+  required_checks=@("HEAD_MATCH","MANIFEST_MATCH","M07_CERTIFICATION_BOUND","EXACT_13_TOOL_SURFACE","EXPLICIT_ACTIVE_RUNTIME_GATE","RUNTIME_PROVENANCE_AND_IDENTITY_BINDING","INACTIVE_MODE_UNCHANGED","LEGACY27_UNCHANGED","SERVER_BOUND_REGISTRY_DIGEST","M06_TRANSACTION_ISOLATION","M07_TASK_RUNNER_BINDING","PUBLIC_INPUT_EXACT_KEYS","NO_GENERIC_EXEC_AUTHORITY","NO_REMOTE_GIT_AUTHORITY","S2_DISABLED","DESTRUCTIVE_LOCKED","CANONICAL_UNCHANGED_BEFORE_PROMOTION","LOCAL_CHECKPOINT_ONLY","CAS_PROMOTION","ROLLBACK_CLEANUP","STALE_CAS_FAIL_CLOSED","TASK_FAILURE_FAIL_CLOSED","EFFECT_POLICY_FAIL_CLOSED","TUNNEL_INTEGRITY","LONG_LIVED_RUNTIME_UNCHANGED","ZERO_RESIDUE","SECRETS_PERSISTED_FALSE","DOGFOOD_NOT_ACTIVATED")
   allowed_verdicts=@("PASS","BLOCKED")
 }
 $HandoffPath=Join-Path $EvidenceRoot "independent-review-handoff.json"; [IO.File]::WriteAllText($HandoffPath, (($Handoff | ConvertTo-Json -Depth 6) + "`n"), [Text.UTF8Encoding]::new($false))

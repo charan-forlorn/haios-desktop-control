@@ -24,7 +24,11 @@ import {
   createOperatorToolDefinitions,
   dispatchOperatorFoundationTool,
 } from "./operator/server-foundation.js";
-import { dispatchOperatorControlTool, type OperatorControlRuntime } from "./operator/control-runtime.js";
+import { dispatchOperatorControlTool } from "./operator/control-runtime.js";
+import {
+  isQualifiedOperatorControlRuntime,
+  type QualifiedOperatorControlRuntime,
+} from "./operator/qualified-control-runtime.js";
 import { TransactionMutationAdapter } from "./transactions/adapter.js";
 import { createGitCurrentnessProvider, TRANSACTION_PROJECT_ROOT } from "./transactions/currentness.js";
 import { TransactionService, dispatchTransactionTool, type TransactionServiceApi } from "./transactions/service.js";
@@ -54,7 +58,7 @@ export interface GatewayServerConfig {
   readonly protocolMode?: "legacy27" | "operator13";
   readonly operatorTaskRegistryPath?: string;
   readonly operatorMode?: "READ_ONLY_EMERGENCY" | "ACTIVE";
-  readonly operatorRuntime?: OperatorControlRuntime;
+  readonly operatorRuntime?: QualifiedOperatorControlRuntime;
   readonly host?: string;
   readonly port?: number;
 }
@@ -191,6 +195,9 @@ export async function createGatewayServer(
     : undefined;
   if (operatorMode === "ACTIVE" && config.operatorRuntime === undefined) {
     throw new Error("M08_ACTIVE_RUNTIME_REQUIRED");
+  }
+  if (operatorMode === "ACTIVE" && !isQualifiedOperatorControlRuntime(config.operatorRuntime)) {
+    throw new Error("M08_ACTIVE_RUNTIME_UNQUALIFIED");
   }
   if (operatorMode !== "ACTIVE" && config.operatorRuntime !== undefined) {
     throw new Error("M08_ACTIVE_RUNTIME_NOT_AUTHORIZED");

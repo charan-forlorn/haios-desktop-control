@@ -158,3 +158,12 @@ Pre-review terminal:
 
 Final zero-blocker terminal:
 `HAIOS_DESKTOP_CONTROL_PLANE_R1_M08_CONTROLLED_OPERATOR_WIRING_QUALIFIED`
+
+## 13. Independent-Review Remediation R1 — Qualified Runtime Provenance
+The first independent M08 review correctly blocked certification because a structural `OperatorControlRuntime` could be injected without proving it was composed from the qualified M06/M07 primitives.
+
+M08 therefore adds a separate qualified-runtime factory and fail-closed server brand check. `createQualifiedOperatorControlRuntime()` is the only path accepted by ACTIVE server creation. It internally constructs `LocalOperatorGit`, `OperatorTransactionService`, `SandboxExecutor`, and `OperatorTaskRunner`; callers cannot inject replacements for those primitives.
+
+The factory loads the task registry and effect policy from bytes itself and requires the exact M08-qualified identities `e94aaa6e60534316736a958c80bd33db691b2494b1518391a15d9f90f1e7e72c` and `00dfb27757d629e09bf2f91c4247004ecd1162bdd7e14faee88c1a777b2e5335`. It brands the resulting frozen runtime in a module-private `WeakSet`. ACTIVE server creation rejects any merely structural or forged runtime with `M08_ACTIVE_RUNTIME_UNQUALIFIED`.
+
+This remediation does not alter M06/M07 primitive logic, public tool names, S2, DESTRUCTIVE state, long-lived Operator state, or production/dogfood activation boundaries.

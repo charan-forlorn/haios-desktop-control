@@ -1,12 +1,10 @@
-﻿import { join } from "node:path";
+import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { createOperatorControlRuntime, type OperatorControlTransactionApi } from "../src/operator/control-runtime.js";
 import { OPERATOR_V1_TOOL_NAMES } from "../src/operator/protocol.js";
-import { loadTaskRegistryV2 } from "../src/operator/task-contract-v2.js";
-import { loadTaskEffectPolicy } from "../src/operator/task-effects.js";
+import { createQualifiedOperatorControlRuntime } from "../src/operator/qualified-control-runtime.js";
 import { createGatewayServer, type GatewayRuntime } from "../src/server.js";
 import type { DesktopCommanderReadClient } from "../src/upstream.js";
 
@@ -23,27 +21,12 @@ function fakeUpstream(): DesktopCommanderReadClient {
   };
 }
 
-function primitive(transactionCalls: string[]): OperatorControlTransactionApi {
-  const allow = (method: string) => async (..._args: unknown[]) => {
-    transactionCalls.push(method);
-    return { decision: "ALLOW" as const, transaction: { txId: "txn_active" }, state: "OPEN" };
-  };
-  return {
-    begin: allow("begin"), stagePatch: allow("stagePatch"), stageCreate: allow("stageCreate"),
-    stageMove: allow("stageMove"), stageRemove: allow("stageRemove"), validate: allow("validate"),
-    apply: allow("apply"), rollback: allow("rollback"), checkpoint: allow("checkpoint"),
-    promote: allow("promote"), status: allow("status"),
-  };
-}
-
-async function activeRuntime(transactionCalls: string[]) {
-  const registry = await loadTaskRegistryV2(join(process.cwd(), "task-registry.m07.json"));
-  const effects = await loadTaskEffectPolicy(join(process.cwd(), "task-effects.m07.json"));
-  return createOperatorControlRuntime({
-    transactions: primitive(transactionCalls),
-    tasks: { run: async () => ({ decision: "ALLOW" as const, taskId: "project.test" }) },
-    registry,
-    effects,
+async function activeRuntime() {
+  return createQualifiedOperatorControlRuntime({
+    worktreeRoot: join(process.cwd(), "runtime", "m08-server-test-unused"),
+    allowedProjects: {},
+    registryPath: join(process.cwd(), "task-registry.m07.json"),
+    effectPolicyPath: join(process.cwd(), "task-effects.m07.json"),
   });
 }
 
@@ -88,7 +71,7 @@ describe("M08 explicit Operator activation gate", () => {
   });
 
   it("rejects an injected runtime unless ACTIVE is explicit", async () => {
-    const runtime = await activeRuntime([]);
+    const runtime = await activeRuntime();
     await expect(createGatewayServer({
       apiKey: "m08-key", upstream: fakeUpstream(), protocolMode: "operator13", port: 0,
       ...({ operatorRuntime: runtime } as any),
@@ -96,7 +79,7 @@ describe("M08 explicit Operator activation gate", () => {
   });
 
   it("rejects Operator activation configuration on legacy27", async () => {
-    const runtime = await activeRuntime([]);
+    const runtime = await activeRuntime();
     await expect(createGatewayServer({
       apiKey: "m08-key", upstream: fakeUpstream(), protocolMode: "legacy27", port: 0,
       ...({ operatorMode: "ACTIVE", operatorRuntime: runtime } as any),
@@ -104,8 +87,7 @@ describe("M08 explicit Operator activation gate", () => {
   });
 
   it("routes controlled ACTIVE through injected runtime while listing only 13 tools", async () => {
-    const transactionCalls: string[] = [];
-    const runtime = await activeRuntime(transactionCalls);
+    const runtime = await activeRuntime();
     const connected = await connect({ protocolMode: "operator13", operatorMode: "ACTIVE", operatorRuntime: runtime });
     const listed = await connected.listTools();
     expect(listed.tools.map((tool) => tool.name)).toEqual(OPERATOR_V1_TOOL_NAMES);
@@ -122,9 +104,6 @@ describe("M08 explicit Operator activation gate", () => {
     const caps = payload(await connected.callTool({ name: "operator_capabilities", arguments: {} }));
     expect(caps).toMatchObject({ checkpointQualified: true, promotionQualified: true, s2Enabled: false, genericShell: false, genericExec: false });
 
-    const begun = payload(await connected.callTool({ name: "operator_begin_transaction", arguments: { projectId: "demo", canonicalRoot: "C:\\demo" } }));
-    expect(begun.decision).toBe("ALLOW");
-    expect(transactionCalls).toEqual(["begin"]);
     expect(upstreamCalls).toBe(0);
   });
 });

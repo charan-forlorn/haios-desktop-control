@@ -310,3 +310,13 @@ HAIOS_DESKTOP_CONTROL_PLANE_R1_M08_CONTROLLED_OPERATOR_WIRING_QUALIFIED
 ```
 
 The certification must explicitly state that the long-lived/dedicated Operator production runtime is still `READ_ONLY_EMERGENCY`, S2 is disabled, DESTRUCTIVE is locked, and production dogfood activation has not occurred.
+
+## Independent Review Remediation R1
+
+The first fresh M08 review returned one blocker: ACTIVE accepted an unbranded structural runtime. Remediation is limited to runtime provenance/identity binding.
+
+- [x] Add `src/operator/qualified-control-runtime.ts` with exact registry/effect digest checks, internal construction of M06/M07 primitives, frozen attestation, and module-private `WeakSet` branding.
+- [x] Add `tests/m08-runtime-provenance.test.ts` proving structural fakes are rejected and artifact drift fails closed.
+- [x] Require `isQualifiedOperatorControlRuntime()` at the ACTIVE server boundary.
+- [x] Route the disposable live helper through `createQualifiedOperatorControlRuntime()`.
+- [ ] Commit remediation bytes, run fresh deterministic qualification, and request a new exact-byte independent review.

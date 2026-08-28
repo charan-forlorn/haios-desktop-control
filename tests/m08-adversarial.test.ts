@@ -63,10 +63,23 @@ describe("M08 adversarial authority boundaries", () => {
     }
   });
 
+  it("requires branded qualified runtime provenance before ACTIVE server dispatch", async () => {
+    const qualified = await readFile("src/operator/qualified-control-runtime.ts", "utf8");
+    const server = await readFile("src/server.ts", "utf8");
+    for (const marker of [
+      "new LocalOperatorGit()", "new OperatorTransactionService", "new SandboxExecutor()",
+      "new OperatorTaskRunner", "M08_QUALIFIED_RUNTIME_IDENTITY", "QUALIFIED_RUNTIMES",
+      "M08_QUALIFIED_REGISTRY_IDENTITY_MISMATCH", "M08_QUALIFIED_EFFECT_POLICY_IDENTITY_MISMATCH",
+    ]) expect(qualified).toContain(marker);
+    expect(server).toContain("isQualifiedOperatorControlRuntime(config.operatorRuntime)");
+    expect(server).toContain("M08_ACTIVE_RUNTIME_UNQUALIFIED");
+  });
+
   it("requires the M08 deterministic qualification and final-review boundary", async () => {
     const script = await readFile("scripts/qualify-m08.ps1", "utf8");
     for (const marker of [
       "POWERSHELL_7_REQUIRED", "M08_ADVERSARIAL_TESTS", "M07_FINAL_CERTIFICATION_BOUND=PASS",
+      "M08_QUALIFIED_RUNTIME_PROVENANCE=PASS",
       "FULL_TEST_PASSING_COUNT", "[StringComparer]::Ordinal", "LIVE_M08_EXACT_13_TOOLS=PASS",
       "LIVE_M08_ACTIVE_STATUS=PASS", "LIVE_M08_TASK=PASS", "LIVE_M08_PROMOTION=PASS",
       "LIVE_M08_ROLLBACK=PASS", "LIVE_M08_STALE_CAS_DENIAL=PASS", "WORKTREE_RESIDUE=0",
