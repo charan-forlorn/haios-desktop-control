@@ -3,6 +3,9 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const scriptPath = join(process.cwd(), "scripts", "m10-preflight.ps1");
+const executePath = join(process.cwd(), "scripts", "execute-m10-readonly-cutover.ps1");
+const preflightQualifierPath = join(process.cwd(), "scripts", "qualify-m10-preflight.ps1");
+const liveQualifierPath = join(process.cwd(), "scripts", "qualify-m10-live.ps1");
 
 describe("M10 production preflight contract", () => {
   it("hard-binds production integration points and read-only inventory", async () => {
@@ -53,6 +56,54 @@ describe("M10 production preflight contract", () => {
       "task-scheduler-feasibility.json",
     ]) expect(source).toContain(marker);
     expect(source).not.toContain("Register-ScheduledTask");
+  });
+
+  it("models and registers an unlimited, battery-tolerant supervisor while preserving restart policy", async () => {
+    const [preflight, execute] = await Promise.all([
+      readFile(scriptPath, "utf8"),
+      readFile(executePath, "utf8"),
+    ]);
+    for (const source of [preflight, execute]) {
+      for (const marker of [
+        "-AllowStartIfOnBatteries",
+        "-DontStopIfGoingOnBatteries",
+        "-ExecutionTimeLimit ([TimeSpan]::Zero)",
+        "-RestartCount 3",
+        "-RestartInterval (New-TimeSpan -Minutes 1)",
+      ]) expect(source).toContain(marker);
+    }
+    for (const marker of [
+      "disallow_start_if_on_batteries",
+      "stop_if_going_on_batteries",
+      "execution_time_limit",
+      "restart_count",
+      "restart_interval",
+      "Settings.DisallowStartIfOnBatteries",
+      "Settings.StopIfGoingOnBatteries",
+    ]) expect(preflight).toContain(marker);
+  });
+
+  it("fails closed when preflight or live task longevity settings drift", async () => {
+    const [preflightQualifier, liveQualifier] = await Promise.all([
+      readFile(preflightQualifierPath, "utf8"),
+      readFile(liveQualifierPath, "utf8"),
+    ]);
+    expect(preflightQualifier).toContain("M10_TASK_LONGEVITY_DRIFT");
+    expect(liveQualifier).toContain("M10_LIVE_TASK_LONGEVITY_DRIFT");
+    for (const marker of [
+      "disallow_start_if_on_batteries",
+      "stop_if_going_on_batteries",
+      "execution_time_limit",
+      "restart_count",
+      "restart_interval",
+    ]) expect(preflightQualifier).toContain(marker);
+    for (const marker of [
+      "DisallowStartIfOnBatteries",
+      "StopIfGoingOnBatteries",
+      "ExecutionTimeLimit",
+      "RestartCount",
+      "RestartInterval",
+    ]) expect(liveQualifier).toContain(marker);
   });
 
   it("dry-renders only the intended operator and dedicated-tunnel deltas", async () => {

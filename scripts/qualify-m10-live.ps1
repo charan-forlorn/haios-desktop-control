@@ -66,6 +66,7 @@ if(-not $task){throw "M10_LIVE_TASK_MISSING"}
 $expectedSupervisor=Join-Path $DeploymentRoot "scripts\run-m10-readonly-supervisor.mjs"
 $action=@($task.Actions)[0]
 if(-not ([string]$action.Arguments).Contains($expectedSupervisor)){throw "M10_LIVE_TASK_IDENTITY_DRIFT"}
+if(-not ([bool]$task.Settings.DisallowStartIfOnBatteries -eq $false) -or -not ([bool]$task.Settings.StopIfGoingOnBatteries -eq $false) -or [string]$task.Settings.ExecutionTimeLimit -ne "PT0S" -or [int]$task.Settings.RestartCount -ne 3 -or [string]$task.Settings.RestartInterval -ne "PT1M"){throw "M10_LIVE_TASK_LONGEVITY_DRIFT"}
 $secretAclPass=Test-SecretAcl
 if(-not $secretAclPass){throw "M10_LIVE_SECRET_ACL_FAILED"}
 $apiKeyFile=Join-Path $StateRoot "operator-api-key";$configPath=Join-Path $StateRoot "host-config.json"

@@ -88,7 +88,7 @@ function Test-TaskSchedulerFeasibility {
   $action = New-ScheduledTaskAction -Execute $node -Argument "`"$supervisor`" `"$config`""
   $trigger = New-ScheduledTaskTrigger -AtLogOn -User $identity
   $principal = New-ScheduledTaskPrincipal -UserId $identity -LogonType Interactive -RunLevel Limited
-  $settings = New-ScheduledTaskSettingsSet -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
+  $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
   $task = New-ScheduledTask -Action $action -Trigger $trigger -Principal $principal -Settings $settings
   [ordered]@{
     task_name=$TaskName; current_user=$identity; task_registered=$false
@@ -98,7 +98,11 @@ function Test-TaskSchedulerFeasibility {
     action_argument=[string]$task.Actions.Arguments
     supervisor_bound=([string]$task.Actions.Arguments).Contains($supervisor)
     trigger_user=[string]$task.Triggers.UserId
+    disallow_start_if_on_batteries=[bool]$task.Settings.DisallowStartIfOnBatteries
+    stop_if_going_on_batteries=[bool]$task.Settings.StopIfGoingOnBatteries
+    execution_time_limit=[string]$task.Settings.ExecutionTimeLimit
     restart_count=[int]$task.Settings.RestartCount
+    restart_interval=[string]$task.Settings.RestartInterval
     no_password_stored=$true
   }
 }

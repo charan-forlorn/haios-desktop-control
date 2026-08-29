@@ -251,7 +251,7 @@ services:
   $action=New-ScheduledTaskAction -Execute $node -Argument "`"$supervisor`" `"$ConfigPath`""
   $trigger=New-ScheduledTaskTrigger -AtLogOn -User $identityName
   $principal=New-ScheduledTaskPrincipal -UserId $identityName -LogonType Interactive -RunLevel Limited
-  $settings=New-ScheduledTaskSettingsSet -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
+  $settings=New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
   $task=New-ScheduledTask -Action $action -Trigger $trigger -Principal $principal -Settings $settings
   Register-ScheduledTask -TaskName $TaskName -InputObject $task -Force | Out-Null
   Start-ScheduledTask -TaskName $TaskName

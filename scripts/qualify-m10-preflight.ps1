@@ -313,6 +313,7 @@ if(-not ([bool]$Acl.inherited_protected -and [bool]$Acl.current_operator_present
 $Task=Get-Content -Raw $TaskPath|ConvertFrom-Json
 if([bool]$Task.task_registered -or [string]$Task.logon_type -ne "Interactive" -or [string]$Task.run_level -ne "Limited"){throw "M10_TASK_FEASIBILITY_FAILED"}
 if(-not [bool]$Task.supervisor_bound -or -not ([string]$Task.action_argument).Contains("run-m10-readonly-supervisor.mjs")){throw "M10_TASK_SUPERVISOR_DRIFT"}
+if([bool]$Task.disallow_start_if_on_batteries -or [bool]$Task.stop_if_going_on_batteries -or [string]$Task.execution_time_limit -ne "PT0S" -or [int]$Task.restart_count -ne 3 -or [string]$Task.restart_interval -ne "PT1M"){throw "M10_TASK_LONGEVITY_DRIFT"}
 $Compose=Get-Content -Raw $ComposePath|ConvertFrom-Json
 if(-not ([bool]$Compose.operator_host_port_removed -and [bool]$Compose.dedicated_target_host_runtime -and [bool]$Compose.dedicated_api_key_mount -and [bool]$Compose.dedicated_file_backed_header) -or [bool]$Compose.shared_tunnel_compose_touched){throw "M10_COMPOSE_RENDER_CONTRACT_FAILED"}
 $SecretPatterns=@('(?<![A-Za-z0-9])ghp_[A-Za-z0-9]{20,}','(?<![A-Za-z0-9])github_pat_[A-Za-z0-9_]{20,}','(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{20,}','BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY')
