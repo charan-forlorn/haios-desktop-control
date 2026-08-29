@@ -90,8 +90,13 @@ $deadline=[DateTime]::UtcNow.AddSeconds(45)
 $restored=$false
 do{
   Start-Sleep -Milliseconds 500
-  & "C:\Program Files\nodejs\node.exe" $m10Probe $M10ApiKeyFile $m10Proof *> $null
-  if($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath $m10Proof)){$restored=$true;break}
+  $oldNativeErrorPreference=$PSNativeCommandUseErrorActionPreference
+  $PSNativeCommandUseErrorActionPreference=$false
+  try{
+    & "C:\Program Files\nodejs\node.exe" $m10Probe $M10ApiKeyFile $m10Proof *> $null
+    $probeExit=$LASTEXITCODE
+  }finally{$PSNativeCommandUseErrorActionPreference=$oldNativeErrorPreference}
+  if($probeExit -eq 0 -and (Test-Path -LiteralPath $m10Proof)){$restored=$true;break}
 }while([DateTime]::UtcNow -lt $deadline)
 if(-not $restored){Block "M10_READ_ONLY_EMERGENCY_RESTORE_FAILED"}
 $ExpectedRestoredMode="READ_ONLY_EMERGENCY"

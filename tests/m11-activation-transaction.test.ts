@@ -107,6 +107,16 @@ describe("M11 sealed activation transaction", () => {
       expect(source).not.toContain('UTF8.GetBytes(($raw -join "`n"))');
     }
   });
+  it("allows transient native probe failures only inside bounded readiness retry loops", async () => {
+    const [, execute, rollback] = await sources();
+    for (const source of [execute, rollback]) {
+      expect(source).toContain("$oldNativeErrorPreference=$PSNativeCommandUseErrorActionPreference");
+      expect(source).toContain("$PSNativeCommandUseErrorActionPreference=$false");
+      expect(source).toContain("$probeExit=$LASTEXITCODE");
+      expect(source).toContain("$PSNativeCommandUseErrorActionPreference=$oldNativeErrorPreference");
+      expect(source).toContain("$probeExit -eq 0");
+    }
+  });
   it("automatically rolls back any failure after mutation begins", async () => {
     const [, execute, rollback] = await sources();
     expect(execute).toContain("$mutationStarted=$false");
