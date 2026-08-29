@@ -60,12 +60,52 @@ describe("M10 adversarial pre-live boundary", () => {
     for (const marker of [
       "execute-m10-readonly-cutover.ps1", "rollback-m10-readonly-cutover.ps1",
       "m10-preflight.ps1", "qualify-m10-live.ps1", "run-m10-readonly-runtime.mjs",
+      "run-m10-readonly-supervisor.mjs",
       "candidate_manifest_sha256", "executor_sha256", "rollback_sha256",
       "preflight_sha256", "live_qualifier_sha256", "strict_launcher_sha256",
+      "strict_supervisor_sha256",
       "APPROVE HAIOS_DESKTOP_CONTROL_PLANE_R1_M10_STAGED_READ_ONLY_CUTOVER",
     ]) expect(source).toContain(marker);
   });
 
+  it("pins deterministic mixed checkout semantics without changing historical byte identities", async () => {
+    const attrs = await readFile(join(process.cwd(), ".gitattributes"), "utf8").catch(() => "");
+    for (const marker of [
+      "* text=auto eol=crlf",
+      ".gitattributes text eol=lf",
+      "docs/superpowers/plans/2026-08-28-m10-* text eol=lf",
+      "docs/superpowers/specs/2026-08-28-m10-* text eol=lf",
+      "scripts/*m10* text eol=lf",
+      "src/operator/host-runtime.ts text eol=lf",
+      "src/operator/m10-production-config.ts text eol=lf",
+      "tests/m10-* text eol=lf",
+      "tests/m09-host-runtime.test.ts text eol=lf",
+    ]) expect(attrs).toContain(marker);
+  });
+
+  it("fail-closes rollback on missing recovery bindings and preservation drift", async () => {
+    const qualifier = await readFile(qualifierPath, "utf8");
+    const rollback = await readFile(rollbackPath, "utf8");
+    for (const marker of [
+      "dedicated_control_key_file", "dedicated_control_key_file_sha256", "shared_tunnel_sha256",
+    ]) expect(qualifier).toContain(marker);
+    const production = rollback.slice(rollback.indexOf("if ((Get-Sha256 $OperatorCompose)"));
+    for (const marker of [
+      "M10_DEDICATED_CONTROL_KEY_BINDING_MISSING", "M10_DEDICATED_CONTROL_KEY_DRIFT",
+      "M10_ROLLBACK_8769_NOT_FREE", "M10_DEDICATED_RESTORE_ROUTE_FAILED",
+      "M10_DEDICATED_RESTORE_HEALTH_FAILED", "M10_ROLLBACK_SHARED_TUNNEL_DRIFT", "M10_ROLLBACK_8768_DRIFT",
+    ]) expect(production).toContain(marker);
+    const routeProof = production.indexOf("M10_DEDICATED_RESTORE_ROUTE_FAILED");
+    const healthProof = production.indexOf("M10_DEDICATED_RESTORE_HEALTH_FAILED");
+    const dedicatedTrue = production.indexOf("$RollbackResult.dedicated_restored=$true");
+    const sharedProof = production.lastIndexOf("M10_ROLLBACK_SHARED_TUNNEL_DRIFT");
+    const secureProof = production.lastIndexOf("M10_ROLLBACK_8768_DRIFT");
+    const terminal = production.indexOf("HAIOS_DESKTOP_CONTROL_PLANE_R1_M10_ROLLED_BACK_TO_CERTIFIED_M09_READ_ONLY_STATE");
+    expect(dedicatedTrue).toBeGreaterThan(routeProof);
+    expect(dedicatedTrue).toBeGreaterThan(healthProof);
+    expect(terminal).toBeGreaterThan(sharedProof);
+    expect(terminal).toBeGreaterThan(secureProof);
+  });
   it("emits only a no-mutation production decision envelope", async () => {
     const source = await readFile(qualifierPath, "utf8");
     for (const marker of [

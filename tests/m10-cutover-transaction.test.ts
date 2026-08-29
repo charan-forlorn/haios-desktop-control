@@ -144,12 +144,56 @@ describe("M10 sealed cutover transaction contract", () => {
       "execution_journal_sha256",
       "Stop-ScheduledTask",
       "Unregister-ScheduledTask",
-      "git worktree remove",
+      "git.exe -C $Root worktree remove",
       "READ_ONLY_EMERGENCY",
       "HAIOS_DESKTOP_CONTROL_PLANE_R1_M10_ROLLED_BACK_TO_CERTIFIED_M09_READ_ONLY_STATE",
     ]) expect(source).toContain(marker);
     expect(source).not.toContain("docker system prune");
     expect(source).not.toContain("docker compose down");
+  });
+
+  it("seals rollback recovery inputs and enforces rollback preservation order", async () => {
+    const rollback = await readFile(rollbackPath, "utf8");
+    const preflight = await readFile(join(process.cwd(), "scripts", "qualify-m10-preflight.ps1"), "utf8");
+    for (const marker of [
+      "dedicated_control_key_file", "dedicated_control_key_file_sha256",
+      "shared_tunnel_sha256", "listener_8768",
+    ]) expect(preflight).toContain(marker);
+    for (const marker of [
+      "M10_ROLLBACK_8769_NOT_FREE", "M10_DEDICATED_CONTROL_KEY_BINDING_MISSING",
+      "M10_DEDICATED_CONTROL_KEY_DRIFT", "M10_DEDICATED_RESTORE_ROUTE_FAILED",
+      "M10_ROLLBACK_SHARED_TUNNEL_DRIFT", "M10_ROLLBACK_8768_DRIFT",
+    ]) expect(rollback).toContain(marker);
+    const stopTask = rollback.indexOf("Stop-ScheduledTask");
+    const portFree = rollback.indexOf("M10_ROLLBACK_8769_NOT_FREE");
+    const restoreOperator = rollback.indexOf("operator-mcp", portFree);
+    const health = rollback.indexOf("OPERATOR_EMERGENCY_HEALTH_FAILED", restoreOperator);
+    const restoreDedicated = rollback.indexOf("operator-dedicated-tunnel-client", health);
+    const dedicatedRoute = rollback.indexOf("M10_DEDICATED_RESTORE_ROUTE_FAILED", restoreDedicated);
+    const dedicatedMount = rollback.indexOf("M10_DEDICATED_RESTORE_MOUNT_FAILED", dedicatedRoute);
+    const dedicatedResidue = rollback.indexOf("M10_DEDICATED_RESTORE_M10_KEY_RESIDUE", dedicatedMount);
+    const dedicatedTrue = rollback.indexOf("$RollbackResult.dedicated_restored=$true", dedicatedResidue);
+    const shared = rollback.indexOf("M10_ROLLBACK_SHARED_TUNNEL_DRIFT", dedicatedTrue);
+    const secure8768 = rollback.indexOf("M10_ROLLBACK_8768_DRIFT", shared);
+    const cleanup = rollback.indexOf("git.exe -C $Root worktree remove", secure8768);
+    const finalShared = rollback.lastIndexOf("M10_ROLLBACK_SHARED_TUNNEL_DRIFT");
+    const final8768 = rollback.lastIndexOf("M10_ROLLBACK_8768_DRIFT");
+    const terminal = rollback.indexOf("HAIOS_DESKTOP_CONTROL_PLANE_R1_M10_ROLLED_BACK_TO_CERTIFIED_M09_READ_ONLY_STATE", final8768);
+    for (const index of [stopTask, portFree, restoreOperator, health, restoreDedicated, dedicatedRoute, dedicatedMount, dedicatedResidue, dedicatedTrue, shared, secure8768, cleanup, finalShared, final8768, terminal]) expect(index).toBeGreaterThanOrEqual(0);
+    expect(stopTask).toBeLessThan(portFree);
+    expect(portFree).toBeLessThan(restoreOperator);
+    expect(restoreOperator).toBeLessThan(health);
+    expect(health).toBeLessThan(restoreDedicated);
+    expect(restoreDedicated).toBeLessThan(dedicatedRoute);
+    expect(dedicatedRoute).toBeLessThan(dedicatedMount);
+    expect(dedicatedMount).toBeLessThan(dedicatedResidue);
+    expect(dedicatedResidue).toBeLessThan(dedicatedTrue);
+    expect(dedicatedTrue).toBeLessThan(shared);
+    expect(shared).toBeLessThan(secure8768);
+    expect(secure8768).toBeLessThan(cleanup);
+    expect(cleanup).toBeLessThan(finalShared);
+    expect(finalShared).toBeLessThan(final8768);
+    expect(final8768).toBeLessThan(terminal);
   });
 
   it("does not accept caller-controlled production resource names or paths", async () => {
@@ -200,5 +244,22 @@ describe("M10 post-cutover live qualifier contract", () => {
       "Register-ScheduledTask", "Unregister-ScheduledTask", "Start-ScheduledTask", "Stop-ScheduledTask",
       " compose up", " compose down", "docker rm", "Remove-Item -LiteralPath $StateRoot",
     ]) expect(source.toLowerCase()).not.toContain(forbidden.toLowerCase());
+  });
+
+  it("binds post-remediation qualification tooling to the durable M10 supervisor", async () => {
+    const live = await readFile(join(process.cwd(), "scripts", "qualify-m10-live.ps1"), "utf8");
+    const prelive = await readFile(join(process.cwd(), "scripts", "qualify-m10-preflight.ps1"), "utf8");
+    expect(live).toContain("run-m10-readonly-supervisor.mjs");
+    expect(live).toContain("$expectedSupervisor");
+    expect(live).not.toContain('$expectedLauncher=Join-Path $DeploymentRoot "scripts\\run-m10-readonly-runtime.mjs"');
+    for (const marker of [
+      "run-m10-readonly-supervisor.mjs",
+      "$StrictSupervisorPath",
+      "$StrictSupervisorSha",
+      "M10_STRICT_SUPERVISOR_HASH_DRIFT",
+      "strict_supervisor_sha256=$StrictSupervisorSha",
+      "tests/m10-supervisor.test.ts",
+      'Task.action_argument).Contains("run-m10-readonly-supervisor.mjs")',
+    ]) expect(prelive).toContain(marker);
   });
 });
