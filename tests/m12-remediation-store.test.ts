@@ -91,6 +91,79 @@ describe("M12 durable remediation episode store", () => {
     await expect(readFile(recordPath, "utf8")).resolves.toBe("{corrupt");
   });
 
+  it("requires reconciliation when filename and hash-valid content episode IDs differ", async () => {
+    const { stateRoot, store, episodeId } = await fixture();
+    const sourceRoot = await mkdtemp(join(tmpdir(), "m12-remediation-store-source-"));
+    roots.push(sourceRoot);
+    const sourceStore = new RemediationStore(sourceRoot);
+    const other = await sourceStore.save(snapshot("episode-002"));
+    const recordPath = join(stateRoot, "remediation", `${episodeId}.json`);
+    await mkdir(join(stateRoot, "remediation"), { recursive: true });
+    await writeFile(recordPath, JSON.stringify(other), "utf8");
+
+    await expect(store.load(episodeId)).rejects.toThrow("M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED");
+    await expect(store.save(snapshot(episodeId, 2))).rejects.toThrow("M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED");
+    await expect(readFile(recordPath, "utf8")).resolves.toBe(JSON.stringify(other));
+  });
+
+  it("preserves corrupt state when remove is requested", async () => {
+    const { stateRoot, store, episodeId } = await fixture();
+    await store.save(snapshot(episodeId, 3));
+    const recordPath = join(stateRoot, "remediation", `${episodeId}.json`);
+    await writeFile(recordPath, "{corrupt", "utf8");
+
+    await expect(store.remove(episodeId)).rejects.toThrow("M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED");
+    await expect(readFile(recordPath, "utf8")).resolves.toBe("{corrupt");
+  });
+
+  it("rejects attempt/replan regressions, stable-identity changes, and stale supplied hashes", async () => {
+    const { store, episodeId } = await fixture();
+    const existing = await store.save({ ...snapshot(episodeId, 2), replanUsed: true });
+
+    await expect(store.save(snapshot(episodeId, 1))).rejects.toThrow("M12_REMEDIATION_STATE_DENIED");
+    await expect(store.save({ ...snapshot(episodeId, 2), replanUsed: false })).rejects.toThrow("M12_REMEDIATION_STATE_DENIED");
+    await expect(store.save({ ...snapshot(episodeId, 3), transactionId: "txn-other" })).rejects.toThrow("M12_REMEDIATION_STATE_DENIED");
+    await expect(store.save({ ...existing, attempt: 3 })).rejects.toThrow("M12_REMEDIATION_STATE_DENIED");
+    await expect(store.load(episodeId)).resolves.toEqual(existing);
+  });
+
+  it("rejects Windows-unsafe and non-canonical episode IDs", async () => {
+    const { store } = await fixture();
+
+    for (const episodeId of ["Episode-001", "episode:001", "episode.", "con", "con.txt", "com1", "lpt9", "nul", "episode/001"]) {
+      await expect(store.save(snapshot(episodeId))).rejects.toThrow("M12_REMEDIATION_STATE_DENIED");
+    }
+  });
+
+  it("fails closed on interrupted-operation residue and preserves a replacement record", async () => {
+    const { stateRoot, store, episodeId } = await fixture();
+    const sourceRoot = await mkdtemp(join(tmpdir(), "m12-remediation-store-replacement-"));
+    roots.push(sourceRoot);
+    const replacement = await new RemediationStore(sourceRoot).save(snapshot(episodeId, 2));
+    const remediationDirectory = join(stateRoot, "remediation");
+    await mkdir(remediationDirectory, { recursive: true });
+    const recordPath = join(remediationDirectory, `${episodeId}.json`);
+    await writeFile(recordPath, JSON.stringify(replacement), "utf8");
+    await writeFile(join(remediationDirectory, ".m12-interrupted-operation"), "interrupted", "utf8");
+
+    await expect(store.load(episodeId)).rejects.toThrow("M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED");
+    await expect(store.save(snapshot(episodeId, 3))).rejects.toThrow("M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED");
+    await expect(store.remove(episodeId)).rejects.toThrow("M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED");
+    await expect(readFile(recordPath, "utf8")).resolves.toBe(JSON.stringify(replacement));
+  });
+
+  it("serializes competing updates so a lower attempt cannot become the durable result", async () => {
+    const { store, episodeId } = await fixture();
+    await store.save(snapshot(episodeId, 1));
+
+    await Promise.allSettled([
+      store.save(snapshot(episodeId, 3)),
+      store.save(snapshot(episodeId, 2)),
+    ]);
+
+    await expect(store.load(episodeId)).resolves.toMatchObject({ attempt: 3, replanUsed: false });
+  });
+
   it.each([
     ["hash mismatch", (record: Record<string, unknown>) => ({ ...record, hash: "0".repeat(64) })],
     ["unknown schema", (record: Record<string, unknown>) => ({ ...record, schema: "HAIOS_M12_REMEDIATION_EPISODE_R2" })],
