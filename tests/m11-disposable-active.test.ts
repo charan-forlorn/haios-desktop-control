@@ -105,9 +105,21 @@ describe("M11 disposable helper destructive-path guard", () => {
     ]) expect(helper).toContain(marker);
     const guard = helper.indexOf("await validateDisposablePaths");
     const firstDelete = helper.indexOf("await rm(runtimeRoot");
-    const resultWrite = helper.indexOf("await writeFile(resultPath");
+    const resultWrite = helper.indexOf('open(resultPath, "wx")');
     expect(guard).toBeGreaterThan(0);
     expect(firstDelete).toBeGreaterThan(guard);
     expect(resultWrite).toBeGreaterThan(guard);
+  });
+});
+
+describe("M11 disposable result final-component guard", () => {
+  it("uses atomic exclusive result creation and rejects any preexisting final component", async () => {
+    const helper = await readFile(join(process.cwd(), "scripts", "live-m11-disposable-active.mjs"), "utf8");
+    for (const marker of [
+      "lstat(resultPath)", "M11_DISPOSABLE_RESULT_PATH_PREEXISTS",
+      'open(resultPath, "wx")', "M11_DISPOSABLE_RESULT_CREATE_DENIED",
+      "resultHandle.writeFile", "resultHandle.close",
+    ]) expect(helper).toContain(marker);
+    expect(helper).not.toContain("await writeFile(resultPath");
   });
 });

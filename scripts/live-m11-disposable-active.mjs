@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { execFile } from "node:child_process";
-import { mkdir, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, open, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -39,6 +39,15 @@ async function validateDisposablePaths() {
   const resultParent = await realpath(dirname(resultPath)).catch(() => { throw new Error("M11_DISPOSABLE_RESULT_PATH_DENIED"); });
   if (!containedBy(evidenceReal, resultParent) || basename(resultPath) !== "m11-disposable-active-result.json") {
     throw new Error("M11_DISPOSABLE_RESULT_PATH_DENIED");
+  }
+  try {
+    await lstat(resultPath);
+    throw new Error("M11_DISPOSABLE_RESULT_PATH_PREEXISTS");
+  } catch (error) {
+    if (error instanceof Error && error.message === "M11_DISPOSABLE_RESULT_PATH_PREEXISTS") throw error;
+    if (!(error && typeof error === "object" && "code" in error && error.code === "ENOENT")) {
+      throw new Error("M11_DISPOSABLE_RESULT_PATH_DENIED");
+    }
   }
   return requestedRuntimeRoot;
 }
@@ -280,7 +289,12 @@ const result = Object.freeze({
 });
 
 await mkdir(dirname(resultPath), { recursive: true });
-await writeFile(resultPath, JSON.stringify(result, null, 2) + "\n", "utf8");
+const resultHandle = await open(resultPath, "wx").catch(() => { throw new Error("M11_DISPOSABLE_RESULT_CREATE_DENIED"); });
+try {
+  await resultHandle.writeFile(JSON.stringify(result, null, 2) + "\n", "utf8");
+} finally {
+  await resultHandle.close();
+}
 console.log(JSON.stringify(result));
 }
 
