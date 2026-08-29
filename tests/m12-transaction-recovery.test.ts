@@ -1,4 +1,5 @@
 import { cp, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -56,8 +57,8 @@ class FakeRecovery implements OperatorTransactionRecoveryCoordinator {
 }
 
 async function fixture(recovery?: FakeRecovery) {
-  const canonical = await mkdtemp("C:\\Workspace\\m12-recovery-canonical-");
-  const worktreeRoot = await mkdtemp("C:\\Workspace\\m12-recovery-worktrees-");
+  const canonical = await mkdtemp(join(tmpdir(), "m12-recovery-canonical-"));
+  const worktreeRoot = await mkdtemp(join(tmpdir(), "m12-recovery-worktrees-"));
   roots.push(canonical, worktreeRoot);
   await writeFile(join(canonical, "alpha.txt"), "alpha", "utf8");
   const git = new FakeGit();

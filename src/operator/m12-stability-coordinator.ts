@@ -75,6 +75,10 @@ export class M12StabilityCoordinator {
   readonly #recovery: OperatorTransactionRecoveryCoordinator | undefined;
 
   constructor(config: M12StabilityCoordinatorConfig) {
+    const keys = Reflect.ownKeys(config);
+    if (keys.some((key) => key !== "remediation" && key !== "facts" && key !== "recovery")) {
+      throw new Error(M12_STABILITY_COORDINATOR_DENIED);
+    }
     if (!(config.remediation instanceof RemediationController)) throw new Error(M12_STABILITY_COORDINATOR_DENIED);
     this.#remediation = config.remediation;
     this.#facts = config.facts;
