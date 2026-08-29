@@ -9,6 +9,9 @@ const concurrency = vi.hoisted(() => ({
   moveReached: undefined as (() => void) | undefined,
   releaseMove: undefined as (() => void) | undefined,
   failTemporaryWrite: false,
+  replaceTemporaryAfterExclusiveCreation: false,
+  failPrePublicationRead: false,
+  substituteTemporaryPath: undefined as string | undefined,
 }));
 
 vi.mock("node:fs/promises", async (importOriginal) => {
@@ -25,12 +28,33 @@ vi.mock("node:fs/promises", async (importOriginal) => {
       return result;
     },
     open: async (...args: Parameters<typeof actual.open>) => {
+      if (concurrency.failPrePublicationRead && String(args[0]).endsWith("episode-001.json") && args[1] === "r") {
+        concurrency.failPrePublicationRead = false;
+        throw new Error("injected pre-publication read failure");
+      }
       const handle = await actual.open(...args);
-      if (!concurrency.failTemporaryWrite || !String(args[0]).includes(".m12-temp-") || args[1] !== "wx") return handle;
-      concurrency.failTemporaryWrite = false;
+      if (!String(args[0]).includes(".m12-temp-") || args[1] !== "wx") return handle;
+      if (concurrency.failTemporaryWrite) {
+        concurrency.failTemporaryWrite = false;
+        return new Proxy(handle, {
+          get(target, property, receiver) {
+            if (property === "writeFile") return async () => { throw new Error("injected temporary write failure"); };
+            return Reflect.get(target, property, receiver);
+          },
+        });
+      }
+      if (!concurrency.replaceTemporaryAfterExclusiveCreation) return handle;
+      concurrency.replaceTemporaryAfterExclusiveCreation = false;
       return new Proxy(handle, {
         get(target, property, receiver) {
-          if (property === "writeFile") return async () => { throw new Error("injected temporary write failure"); };
+          if (property === "close") return async () => {
+            const result = await target.close();
+            await actual.unlink(String(args[0]));
+            await actual.writeFile(String(args[0]), "substitute", "utf8");
+            concurrency.substituteTemporaryPath = String(args[0]);
+            concurrency.failPrePublicationRead = true;
+            return result;
+          };
           return Reflect.get(target, property, receiver);
         },
       });
@@ -48,6 +72,9 @@ const roots: string[] = [];
 afterEach(async () => {
   concurrency.pauseMove = false;
   concurrency.failTemporaryWrite = false;
+  concurrency.replaceTemporaryAfterExclusiveCreation = false;
+  concurrency.failPrePublicationRead = false;
+  concurrency.substituteTemporaryPath = undefined;
   concurrency.releaseMove?.();
   concurrency.moveReached = undefined;
   concurrency.releaseMove = undefined;
@@ -233,6 +260,15 @@ describe("M12 durable remediation episode store", () => {
     await expect(store.save(snapshot(episodeId, 1))).rejects.toThrow("M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED");
   });
 
+  it("requires reconciliation when a valid tombstone has no preserved record", async () => {
+    const { stateRoot, store, episodeId } = await fixture();
+    await store.save(snapshot(episodeId));
+    await store.remove(episodeId);
+    await rm(join(stateRoot, "remediation", `${episodeId}.json`));
+
+    await expect(store.load(episodeId)).rejects.toThrow("M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED");
+  });
+
   it("cleans an exact pre-publication temporary artifact so a retry is not blocked", async () => {
     const { stateRoot, store, episodeId } = await fixture();
     concurrency.failTemporaryWrite = true;
@@ -241,6 +277,16 @@ describe("M12 durable remediation episode store", () => {
     await expect(readdir(join(stateRoot, "remediation"))).resolves.toEqual([]);
     await expect(store.save(snapshot(episodeId))).resolves.toMatchObject({ attempt: 1 });
     await expect(store.load(episodeId)).resolves.toMatchObject({ attempt: 1 });
+  });
+
+  it("preserves a replacement at the temporary path when pre-publication cleanup runs", async () => {
+    const { store, episodeId } = await fixture();
+    concurrency.replaceTemporaryAfterExclusiveCreation = true;
+
+    await expect(store.save(snapshot(episodeId))).rejects.toThrow("M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED");
+
+    expect(concurrency.substituteTemporaryPath).toBeDefined();
+    await expect(readFile(concurrency.substituteTemporaryPath!, "utf8")).resolves.toBe("substitute");
   });
 
   it.each([

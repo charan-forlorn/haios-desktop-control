@@ -283,7 +283,7 @@ export class RemediationStore {
       await this.#assertNoResidue(paths.pin);
       const tombstone = await this.#readTombstone(paths.tombstonePath, paths.pin, requestedEpisodeId, true);
       const stored = await this.#readRecord(paths.recordPath, paths.pin, requestedEpisodeId, true);
-      if (tombstone !== undefined && stored !== undefined && tombstone.tombstone.recordHash !== stored.record.hash) {
+      if (tombstone !== undefined && (stored === undefined || tombstone.tombstone.recordHash !== stored.record.hash)) {
         deny(M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
       }
       await this.#assertDirectory(paths.pin);
@@ -509,10 +509,11 @@ export class RemediationStore {
     }
   }
 
-  async #writeExclusive(path: string, content: string): Promise<FileIdentity> {
+  async #writeExclusive(path: string, content: string, onCreated?: (created: FileIdentity) => void): Promise<FileIdentity> {
     let handle: FileHandle | undefined;
     try {
       handle = await open(path, "wx", 0o600);
+      onCreated?.(identity(await handle.stat()));
       await handle.writeFile(content, "utf8");
       await handle.sync();
       const written = identity(await handle.stat());
@@ -531,7 +532,7 @@ export class RemediationStore {
     let temporaryIdentity: FileIdentity | undefined;
     let publicationAmbiguous = false;
     try {
-      temporaryIdentity = await this.#writeExclusive(temporaryPath, content);
+      temporaryIdentity = await this.#writeExclusive(temporaryPath, content, (created) => { temporaryIdentity = created; });
       await this.#assertDirectory(pin);
       const current = await this.#readPinned(recordPath, pin, true);
       if ((expected === undefined && current !== undefined) || (expected !== undefined && (current === undefined
@@ -551,16 +552,17 @@ export class RemediationStore {
       }
       await this.#assertDirectory(pin);
     } catch (error) {
-      if (!publicationAmbiguous) await this.#removeExactTemporary(temporaryPath, pin);
+      if (!publicationAmbiguous) await this.#removeExactTemporary(temporaryPath, pin, temporaryIdentity);
       if (errorCode(error) === M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED) throw error;
       return deny(M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
     }
   }
 
-  async #removeExactTemporary(path: string, pin: DirectoryPin): Promise<void> {
+  async #removeExactTemporary(path: string, pin: DirectoryPin, expected: FileIdentity | undefined): Promise<void> {
     try {
+      if (expected === undefined) return;
       const temporary = await this.#readPinned(path, pin, true);
-      if (temporary !== undefined) await this.#removePinned(path, pin, temporary.identity);
+      if (temporary !== undefined && sameIdentity(temporary.identity, expected)) await this.#removePinned(path, pin, expected);
     } catch {
       // If the exact artifact cannot be revalidated and removed, it remains as reconciliation evidence.
     }
