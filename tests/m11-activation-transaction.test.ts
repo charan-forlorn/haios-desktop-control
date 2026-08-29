@@ -96,6 +96,17 @@ describe("M11 sealed activation transaction", () => {
     expect(execute).toContain("M11_TUNNEL_POSTIMAGE_CURRENT");
   });
 
+  it("binds tunnel currentness to stable container identity instead of volatile health state", async () => {
+    const [preflight, execute, rollback] = await sources();
+    for (const source of [preflight, execute, rollback]) {
+      expect(source).toContain("config_image");
+      expect(source).toContain("restart_policy");
+      expect(source).toContain("network_mode");
+      expect(source).toContain("mounts=$mount");
+      expect(source).toContain("networks=$net");
+      expect(source).not.toContain('UTF8.GetBytes(($raw -join "`n"))');
+    }
+  });
   it("automatically rolls back any failure after mutation begins", async () => {
     const [, execute, rollback] = await sources();
     expect(execute).toContain("$mutationStarted=$false");

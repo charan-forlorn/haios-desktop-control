@@ -37,7 +37,11 @@ function Get-ListenerIdentity([int]$PortNumber){
 function Get-ContainerDigest([string]$Name){
   $raw=& docker.exe inspect $Name 2>$null
   if($LASTEXITCODE -ne 0 -or -not $raw){throw "M11_ROLLBACK_CONTAINER_UNAVAILABLE:$Name"}
-  $bytes=[Text.Encoding]::UTF8.GetBytes(($raw -join "`n"))
+  $o=($raw|ConvertFrom-Json)[0]
+  $net=@($o.NetworkSettings.Networks.PSObject.Properties|Sort-Object Name|ForEach-Object{[ordered]@{name=$_.Name;network_id=$_.Value.NetworkID;endpoint_id=$_.Value.EndpointID;ip=$_.Value.IPAddress;gateway=$_.Value.Gateway}})
+  $mount=@($o.Mounts|Sort-Object Destination,Type|ForEach-Object{[ordered]@{type=$_.Type;destination=$_.Destination;mode=$_.Mode;rw=$_.RW;propagation=$_.Propagation}})
+  $snap=[ordered]@{id=$o.Id;created=$o.Created;image_id=$o.Image;config_image=$o.Config.Image;path=$o.Path;args=@($o.Args);network_mode=$o.HostConfig.NetworkMode;restart_policy=$o.HostConfig.RestartPolicy;mounts=$mount;networks=$net}
+  $bytes=[Text.Encoding]::UTF8.GetBytes(($snap|ConvertTo-Json -Depth 8 -Compress))
   [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant()
 }
 function Block([string]$Why){throw "M11_ROLLBACK_CURRENTNESS_BLOCKED:$Why"}
