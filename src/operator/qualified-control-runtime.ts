@@ -1,4 +1,4 @@
-import { LocalOperatorGit } from "./local-git.js";
+import { LocalOperatorGit, readLocalGitCurrentBranch } from "./local-git.js";
 import { SandboxExecutor } from "./sandbox-executor.js";
 import { loadTaskRegistryV2 } from "./task-contract-v2.js";
 import { loadTaskEffectPolicy } from "./task-effects.js";
@@ -72,7 +72,10 @@ export async function createQualifiedOperatorControlRuntime(
     worktreeRoot: config.worktreeRoot,
     allowedProjects: Object.freeze({ ...config.allowedProjects }),
     git,
-    ...(config.recovery === undefined ? {} : { recovery: config.recovery }),
+    ...(config.recovery === undefined ? {} : {
+      recovery: config.recovery,
+      readCurrentWorktreeBranch: readLocalGitCurrentBranch,
+    }),
   });
   const sandbox = new SandboxExecutor();
   const tasks = new OperatorTaskRunner({

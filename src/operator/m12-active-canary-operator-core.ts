@@ -1,12 +1,12 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { lstat, mkdir, open, readFile, readdir, realpath, rm, unlink } from "node:fs/promises";
+import { lstat, mkdir, open, readFile, readdir, realpath, rm, unlink, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { createOperatorControlRuntime, type OperatorControlRuntime } from "./control-runtime.js";
-import { LocalOperatorGit } from "./local-git.js";
+import { LocalOperatorGit, readLocalGitCurrentBranch } from "./local-git.js";
 import {
   M12StabilityCoordinator,
   createM12StabilityTaskApi,
@@ -14,6 +14,7 @@ import {
   type M12StabilityFactsProvider,
 } from "./m12-stability-coordinator.js";
 import {
+  M12_ACTIVE_CANARY_PROJECT_ROOT,
   validateM12ActiveCanaryConfig,
   type M12ActiveCanaryConfig,
 } from "./m12-active-canary-config.js";
@@ -26,11 +27,16 @@ import { RecoveryLeaseManager, type ProcessIdentityProbe } from "./recovery-leas
 import { RemediationController } from "./remediation-controller.js";
 import { RemediationStore } from "./remediation-store.js";
 import { classifyRecovery, type RecoveryClassificationInput } from "./recovery-classifier.js";
+import type { SandboxExecutionRequest, SandboxExecutionResult } from "./sandbox-executor.js";
+import { loadTaskRegistryV2 } from "./task-contract-v2.js";
+import { loadTaskEffectPolicy } from "./task-effects.js";
+import { OperatorTaskRunner, type OperatorTaskRunRequest } from "./task-runner.js";
 import type { OperatorTransactionRecord } from "./transaction-types.js";
 import type {
   OperatorTransactionRecoveryCoordinator,
   OperatorTransactionRecoveryDecision,
 } from "./transaction-isolation.js";
+import { OperatorTransactionService } from "./transaction-isolation.js";
 
 const RECOVERY_SCHEMA = "HAIOS_M12_TRANSACTION_RECOVERY_R1" as const;
 const RECOVERY_TTL_MS = 300_000;
@@ -91,12 +97,16 @@ function runtimeIdentityPaths() {
   for (const root of [resolve(moduleDir, "../.."), resolve(moduleDir, "../../..")]) {
     const registryPath = join(root, "task-registry.m07.json");
     const effectPolicyPath = join(root, "task-effects.m07.json");
-    if (existsSync(registryPath) && existsSync(effectPolicyPath)) return Object.freeze({ registryPath, effectPolicyPath });
+    if (existsSync(registryPath) && existsSync(effectPolicyPath)) return Object.freeze({ root, registryPath, effectPolicyPath });
   }
   throw new Error("M12_ACTIVE_CANARY_RUNTIME_IDENTITY_FILES_NOT_FOUND");
 }
 
-class RuntimeProcessProbe implements ProcessIdentityProbe {
+interface M12RuntimeProcessProbe extends ProcessIdentityProbe {
+  current(): Promise<{ readonly ownerPid: number; readonly ownerStartTime: string }>;
+}
+
+class RuntimeProcessProbe implements M12RuntimeProcessProbe {
   readonly #pid = process.pid;
   readonly #startTime = new Date(Date.now() - Math.floor(process.uptime() * 1000)).toISOString();
   async inspect(pid: number): Promise<{ readonly alive: boolean; readonly startTime: string } | undefined> {
@@ -220,17 +230,27 @@ export async function scanM12CanonicalGitCommonDirForLocks(commonDir: string): P
   return false;
 }
 
+interface M12RecoveryRuntimeConfig {
+  readonly stateRoot: string;
+  readonly worktreeRoot: string;
+  readonly probe?: M12RuntimeProcessProbe;
+  readonly now?: () => number;
+}
+
 class M12RuntimeRecoveryCoordinator implements OperatorTransactionRecoveryCoordinator {
   readonly #stateRoot: string;
   readonly #worktreeRoot: string;
   readonly #git = new LocalOperatorGit();
-  readonly #probe = new RuntimeProcessProbe();
+  readonly #probe: M12RuntimeProcessProbe;
   readonly #leases: RecoveryLeaseManager;
   readonly #heartbeats = new Map<string, M12RecoveryLeaseHeartbeat>();
-  constructor(config: M12ActiveCanaryConfig) {
+  constructor(config: M12RecoveryRuntimeConfig) {
     this.#stateRoot = resolve(config.stateRoot);
     this.#worktreeRoot = win32.resolve(config.worktreeRoot);
-    this.#leases = new RecoveryLeaseManager({ stateRoot: this.#stateRoot, processProbe: this.#probe });
+    this.#probe = config.probe ?? new RuntimeProcessProbe();
+    this.#leases = new RecoveryLeaseManager({
+      stateRoot: this.#stateRoot, processProbe: this.#probe, ...(config.now === undefined ? {} : { now: config.now }),
+    });
   }
   async #directory(): Promise<string> {
     await mkdir(this.#stateRoot, { recursive: true });
@@ -392,6 +412,10 @@ class M12RuntimeRecoveryCoordinator implements OperatorTransactionRecoveryCoordi
     try { input = await this.classificationInput(record); }
     catch { return "MANUAL_RECONCILIATION_REQUIRED"; }
     const decision = classifyRecovery(input);
+    if (input.leaseOwner !== "LIVE") {
+      this.#heartbeats.get(record.txId)?.stop();
+      this.#heartbeats.delete(record.txId);
+    }
     if (decision !== "SAFE_TO_ROLLBACK") return decision;
     const snapshot = await this.#read(record.txId).catch(() => undefined);
     const lease = await this.#leases.inspect(record.txId, input.repositoryIdentity).catch(() => undefined);
@@ -402,7 +426,7 @@ class M12RuntimeRecoveryCoordinator implements OperatorTransactionRecoveryCoordi
       if ((await this.#git.head(record.canonicalRoot)) !== record.baseHeadSha || (await this.#git.status(record.canonicalRoot)).trim() !== "") {
         return "MANUAL_RECONCILIATION_REQUIRED";
       }
-      const branch = await fixedGitBranch(record.worktreePath);
+      const branch = await readLocalGitCurrentBranch(record.worktreePath);
       if (branch !== record.branchName) return "MANUAL_RECONCILIATION_REQUIRED";
       await this.#git.worktreeRemove(record.canonicalRoot, record.worktreePath);
       await this.#git.deleteBranch(record.canonicalRoot, record.branchName);
@@ -415,13 +439,6 @@ class M12RuntimeRecoveryCoordinator implements OperatorTransactionRecoveryCoordi
   }
 }
 
-async function fixedGitBranch(cwd: string): Promise<string> {
-  return new Promise((resolveBranch, rejectBranch) => {
-    execFile("git", ["--no-optional-locks", "branch", "--show-current"], { cwd, windowsHide: true, encoding: "utf8" }, (error, stdout) => {
-      if (error) rejectBranch(error); else resolveBranch(String(stdout).trim());
-    });
-  });
-}
 async function removeExpiredLeaseExact(stateRoot: string, expectedHash: string, txId: string): Promise<void> {
   const leasePath = join(resolve(stateRoot), "leases", `${txId}.json`);
   const stat = await lstat(leasePath);
@@ -481,7 +498,7 @@ class RuntimeFactsProvider implements M12StabilityFactsProvider {
   }
 }
 
-async function assertStatePaths(config: M12ActiveCanaryConfig): Promise<void> {
+async function assertStatePaths(config: Pick<M12OperatorCompositionConfig, "stateRoot" | "worktreeRoot">): Promise<void> {
   await mkdir(config.stateRoot, { recursive: true });
   await mkdir(config.worktreeRoot, { recursive: true });
   const stateReal = await realpath(config.stateRoot);
@@ -490,10 +507,21 @@ async function assertStatePaths(config: M12ActiveCanaryConfig): Promise<void> {
     throw new Error("M12_ACTIVE_CANARY_STATE_PATH_RECONCILIATION_REQUIRED");
   }
 }
-async function createM12Operator(config: M12ActiveCanaryConfig): Promise<M12ActiveCanaryOperatorRuntime> {
+interface M12OperatorCompositionConfig {
+  readonly worktreeRoot: string;
+  readonly stateRoot: string;
+  readonly allowedProjects: Readonly<Record<string, string>>;
+}
+
+async function createM12Operator(
+  config: M12OperatorCompositionConfig,
+  recoveryOptions: Omit<M12RecoveryRuntimeConfig, "stateRoot" | "worktreeRoot"> = {},
+): Promise<M12ActiveCanaryOperatorRuntime> {
   await assertStatePaths(config);
   const paths = runtimeIdentityPaths();
-  const recovery = new M12RuntimeRecoveryCoordinator(config);
+  const recovery = new M12RuntimeRecoveryCoordinator({
+    stateRoot: config.stateRoot, worktreeRoot: config.worktreeRoot, ...recoveryOptions,
+  });
   const base = await createQualifiedOperatorControlRuntime({
     worktreeRoot: config.worktreeRoot, allowedProjects: config.allowedProjects,
     registryPath: paths.registryPath, effectPolicyPath: paths.effectPolicyPath, recovery,
@@ -536,4 +564,279 @@ export async function createM12ActiveCanaryOperatorRuntime(config: unknown): Pro
 }
 export function isM12ActiveCanaryOperatorRuntime(value: unknown): value is M12ActiveCanaryOperatorRuntime {
   return typeof value === "object" && value !== null && M12_CORE_RUNTIMES.has(value as object);
+}
+
+const M12_DISPOSABLE_B5_MARKER = "HAIOS_M12_DISPOSABLE_B5_FIXTURE_R1\n";
+const M12_DISPOSABLE_B5_RECOVERY_TTL_MS = 300_001;
+
+export interface M12DisposableB5FixtureRuntime {
+  readonly runtime: M12ActiveCanaryOperatorRuntime;
+  readonly inspectFixtureResidue: () => Readonly<{
+    readonly ownedProcesses: number;
+    readonly ownedContainers: number;
+    readonly ownedNetworks: number;
+    readonly completedFixedNodeTasks: number;
+  }>;
+  /** Fixture-only crash/restart recovery; it never accepts a caller-selected transaction or path. */
+  recoverAfterSimulatedOwnerDeath(): Promise<readonly { readonly transactionId: string; readonly classification: string }[]>;
+  /** Fixture-only sealed transition: accepts the sole pending replan using inspected facts and applies its fixed correction. */
+  acceptPendingRemediationReplanAndApplyCorrection(): Promise<Readonly<{ readonly accepted: boolean; readonly episodeId: string; readonly transactionId: string }>>;
+  /** Fixture-only controller/store exercise with fixed observations and no caller-selected remediation facts. */
+  measureRemediationNegativeTerminals(): Promise<Readonly<{
+    readonly stagnation: Readonly<{ readonly directive: string; readonly durable: boolean }>;
+    readonly budget: Readonly<{ readonly directive: string; readonly durable: boolean }>;
+  }>>;
+}
+
+interface M12DisposableB5FixtureConfig {
+  readonly fixtureRoot: string;
+  readonly canonicalRoot: string;
+}
+
+function disposableFixtureDeny(): never {
+  throw new Error("M12_DISPOSABLE_B5_FIXTURE_DENIED");
+}
+
+function disposableFixtureData(value: unknown): M12DisposableB5FixtureConfig {
+  if (typeof value !== "object" || value === null || Object.getPrototypeOf(value) !== Object.prototype) disposableFixtureDeny();
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  const keys = Reflect.ownKeys(descriptors);
+  if (keys.length !== 2 || keys.some((key) => key !== "fixtureRoot" && key !== "canonicalRoot")) disposableFixtureDeny();
+  for (const key of ["fixtureRoot", "canonicalRoot"] as const) {
+    const descriptor = descriptors[key];
+    if (descriptor === undefined || !("value" in descriptor) || typeof descriptor.value !== "string") disposableFixtureDeny();
+  }
+  return Object.freeze({
+    fixtureRoot: (descriptors.fixtureRoot!.value as string),
+    canonicalRoot: (descriptors.canonicalRoot!.value as string),
+  });
+}
+
+function isProtectedCanaryPath(candidate: string): boolean {
+  return samePath(candidate, M12_ACTIVE_CANARY_PROJECT_ROOT)
+    || contained(M12_ACTIVE_CANARY_PROJECT_ROOT, candidate);
+}
+
+class DisposableFixtureProcessProbe implements M12RuntimeProcessProbe {
+  #alive = true;
+  readonly #startTime = "2026-08-30T00:00:00.000Z";
+  async inspect(pid: number): Promise<{ readonly alive: boolean; readonly startTime: string } | undefined> {
+    return pid === 4242 ? Object.freeze({ alive: this.#alive, startTime: this.#startTime }) : undefined;
+  }
+  async current(): Promise<{ readonly ownerPid: number; readonly ownerStartTime: string }> {
+    if (!this.#alive) throw new Error("M12_DISPOSABLE_B5_FIXTURE_OWNER_DEAD");
+    return Object.freeze({ ownerPid: 4242, ownerStartTime: this.#startTime });
+  }
+  simulateDeath(): void { this.#alive = false; }
+}
+
+/** A fixture-only S0 adapter: immutable repository runner, no worktree code execution. */
+class DisposableB5FixedRunnerSandbox {
+  readonly #worktreeRoot: string;
+  readonly #runnerPath: string;
+  #ownedProcesses = 0;
+  #completedFixedNodeTasks = 0;
+  constructor(worktreeRoot: string, runnerPath: string) {
+    this.#worktreeRoot = worktreeRoot;
+    this.#runnerPath = runnerPath;
+  }
+  inspectFixtureResidue(): Readonly<{
+    readonly ownedProcesses: number;
+    readonly ownedContainers: number;
+    readonly ownedNetworks: number;
+    readonly completedFixedNodeTasks: number;
+  }> {
+    return Object.freeze({ ownedProcesses: this.#ownedProcesses, ownedContainers: 0, ownedNetworks: 0,
+      completedFixedNodeTasks: this.#completedFixedNodeTasks });
+  }
+
+  async execute(request: SandboxExecutionRequest): Promise<SandboxExecutionResult> {
+    const startedAt = Date.now();
+    const deny = (reason: string): SandboxExecutionResult => Object.freeze({ decision: "DENY", reason,
+      stdout: "", stderr: "", stdoutBytes: 0, stderrBytes: 0, timedOut: false,
+      stdoutTruncated: false, stderrTruncated: false, cleanupVerified: true, durationMs: Date.now() - startedAt });
+    const execution = request.execution;
+    if (execution.taskId !== "project.test" || execution.executable !== "npm"
+      || execution.argv.length !== 1 || execution.argv[0] !== "test" || execution.sandboxProfile !== "S0"
+      || execution.networkAuthority !== "NONE" || !samePath(request.worktreePath, execution.worktreePath)
+      || !contained(this.#worktreeRoot, request.worktreePath)
+      || Object.keys(request.safeEnvironment).some((key) => key !== "CI")) return deny("M12_DISPOSABLE_B5_FIXED_RUNNER_DENIED");
+    const statePath = join(request.worktreePath, "fixture-state.json");
+    const artifactPath = join(request.worktreePath, "coverage", "qualification-artifact.txt");
+    this.#ownedProcesses += 1;
+    let outcome: { readonly exitCode: number; readonly stdout: string; readonly stderr: string };
+    try {
+      outcome = await new Promise((resolveOutcome, rejectOutcome) => execFile(process.execPath,
+        [this.#runnerPath, statePath, artifactPath], { cwd: request.worktreePath, windowsHide: true,
+          encoding: "utf8", env: { CI: request.safeEnvironment.CI ?? "1" } }, (error, stdout, stderr) => {
+          if (error !== null && typeof error.code !== "number") rejectOutcome(error);
+          else resolveOutcome(Object.freeze({ exitCode: error === null ? 0 : error.code as number,
+            stdout: String(stdout), stderr: String(stderr) }));
+        }));
+    } catch { return deny("M12_DISPOSABLE_B5_FIXED_RUNNER_FAILED"); }
+    finally { this.#ownedProcesses -= 1; this.#completedFixedNodeTasks += 1; }
+
+    const stdoutBytes = Buffer.byteLength(outcome.stdout, "utf8");
+    const stderrBytes = Buffer.byteLength(outcome.stderr, "utf8");
+    const base = Object.freeze({ stdout: outcome.stdout, stderr: outcome.stderr, stdoutBytes, stderrBytes,
+      timedOut: false, stdoutTruncated: false, stderrTruncated: false, cleanupVerified: true,
+      durationMs: Date.now() - startedAt });
+    return outcome.exitCode === 0
+      ? Object.freeze({ decision: "ALLOW" as const, exitCode: 0, ...base })
+      : Object.freeze({ decision: "DENY" as const, reason: "SANDBOX_EXIT_NONZERO", exitCode: outcome.exitCode, ...base });
+  }
+}
+
+
+/**
+ * Strictly fixture-contained M12 construction for Task 8 qualification. This does not mint
+ * general provenance: it accepts only the marker-backed canonical child of one disposable root.
+ */
+export async function createM12DisposableB5FixtureRuntime(value: unknown): Promise<M12DisposableB5FixtureRuntime> {
+  const input = disposableFixtureData(value);
+  const fixtureRoot = resolve(input.fixtureRoot);
+  const canonicalRoot = resolve(input.canonicalRoot);
+  const paths = runtimeIdentityPaths();
+  const fixtureBase = join(paths.root, "runtime", "m12-disposable-b5");
+  if (!samePath(dirname(fixtureRoot), fixtureBase)
+    || isProtectedCanaryPath(fixtureRoot) || isProtectedCanaryPath(canonicalRoot)
+    || !samePath(canonicalRoot, join(fixtureRoot, "canonical"))) disposableFixtureDeny();
+  const [fixtureReal, canonicalReal, marker] = await Promise.all([
+    realpath(fixtureRoot).catch(disposableFixtureDeny),
+    realpath(canonicalRoot).catch(disposableFixtureDeny),
+    readFile(join(fixtureRoot, ".m12-disposable-b5.fixture"), "utf8").catch(disposableFixtureDeny),
+  ]);
+  if (!samePath(fixtureReal, fixtureRoot) || !samePath(canonicalReal, canonicalRoot)
+    || !contained(fixtureReal, canonicalReal) || marker !== M12_DISPOSABLE_B5_MARKER) disposableFixtureDeny();
+
+  const stateRoot = join(fixtureReal, "m12-state");
+  const worktreeRoot = join(stateRoot, "worktrees");
+  let now = Date.parse("2026-08-30T00:00:00.000Z");
+  const probe = new DisposableFixtureProcessProbe();
+  const recovery = new M12RuntimeRecoveryCoordinator({ stateRoot, worktreeRoot, probe, now: () => now });
+  await assertStatePaths({ stateRoot, worktreeRoot });
+  const [registry, effects] = await Promise.all([
+    loadTaskRegistryV2(paths.registryPath), loadTaskEffectPolicy(paths.effectPolicyPath),
+  ]);
+  if (registry.sha256 !== M08_QUALIFIED_RUNTIME_IDENTITY.registrySha256
+    || effects.sha256 !== M08_QUALIFIED_RUNTIME_IDENTITY.effectPolicySha256) {
+    throw new Error("M12_DISPOSABLE_B5_QUALIFIED_IDENTITY_MISMATCH");
+  }
+  const git = new LocalOperatorGit();
+  const service = new OperatorTransactionService({
+    worktreeRoot, allowedProjects: Object.freeze({ "operator-canary": canonicalReal }), git, recovery,
+    readCurrentWorktreeBranch: readLocalGitCurrentBranch,
+  });
+  const runnerPath = join(paths.root, "scripts", "m12-disposable-b5-fixed-runner.mjs");
+  const runnerReal = await realpath(runnerPath).catch(disposableFixtureDeny);
+  if (!samePath(runnerReal, runnerPath) || contained(worktreeRoot, runnerReal) || contained(fixtureReal, runnerReal)) disposableFixtureDeny();
+  const directSandbox = new DisposableB5FixedRunnerSandbox(worktreeRoot, runnerReal);
+  const tasks = new OperatorTaskRunner({
+    transactions: service, git, registry, effects,
+    qualifiedEffectPolicySha256: M08_QUALIFIED_RUNTIME_IDENTITY.effectPolicySha256,
+    sandbox: directSandbox,
+    safeEnvironment: Object.freeze({ CI: "1" }),
+  });
+  const transactions = Object.freeze({
+    begin: service.begin.bind(service), stagePatch: service.stagePatch.bind(service),
+    stageCreate: service.stageCreate.bind(service), stageMove: service.stageMove.bind(service),
+    stageRemove: service.stageRemove.bind(service), validate: service.validate.bind(service),
+    apply: service.apply.bind(service), rollback: service.rollback.bind(service), checkpoint: service.checkpoint.bind(service),
+    promote: service.promote.bind(service),
+    status: service.status.bind(service),
+  });
+  const base = Object.freeze({
+    ...createOperatorControlRuntime({
+      transactions, tasks: Object.freeze({ run: tasks.run.bind(tasks) }), registry, effects,
+    }),
+    attestation: M08_QUALIFIED_RUNTIME_IDENTITY,
+  }) as QualifiedOperatorControlRuntime;
+  const remediationStore = new RemediationStore(stateRoot);
+  const remediation = new RemediationController(remediationStore);
+  const facts = new RuntimeFactsProvider(base, recovery);
+  const coordinator = new M12StabilityCoordinator({
+    remediation, facts, recovery,
+  });
+  const stabilityTasks = createM12StabilityTaskApi(base.tasks, coordinator);
+  let latestRemediationTask: Awaited<ReturnType<typeof stabilityTasks.run>> | undefined;
+  let latestRemediationRequest: { readonly txId: string; readonly taskId: string } | undefined;
+  const runtime: M12ActiveCanaryOperatorRuntime = Object.freeze({
+    ...createOperatorControlRuntime({
+      transactions: base.transactions,
+      tasks: Object.freeze({
+        run: async (request: OperatorTaskRunRequest) => {
+          const result = await stabilityTasks.run(request);
+          latestRemediationTask = result;
+          latestRemediationRequest = Object.freeze({ txId: request.txId, taskId: request.taskId });
+          return result;
+        },
+      }),
+      registry: base.registry, effects: base.effects,
+    }),
+    attestation: M08_QUALIFIED_RUNTIME_IDENTITY,
+  });
+  M12_CORE_RUNTIMES.add(runtime);
+  return Object.freeze({
+    runtime,
+    inspectFixtureResidue: () => directSandbox.inspectFixtureResidue(),
+    recoverAfterSimulatedOwnerDeath: async () => {
+      probe.simulateDeath();
+      now += M12_DISPOSABLE_B5_RECOVERY_TTL_MS;
+      return coordinator.recoverStartup();
+    },
+    acceptPendingRemediationReplanAndApplyCorrection: async () => {
+      const task = latestRemediationTask;
+      const request = latestRemediationRequest;
+      if (task === undefined || request === undefined || task.stability.directive !== "REPLAN_REQUIRED") disposableFixtureDeny();
+      const currentFacts = await facts.inspect(request.txId);
+      const activeMutableCodeProcess = directSandbox.inspectFixtureResidue().ownedProcesses !== 0;
+      const unresolvedTaskEffects = currentFacts?.recovery.unresolvedEffects ?? true;
+      const ownership = currentFacts?.recovery.ownership === "EXACT" ? "UNAMBIGUOUS" as const : "AMBIGUOUS" as const;
+      const recoveryClassification = currentFacts === undefined ? undefined : classifyRecovery(currentFacts.recovery);
+      if (currentFacts === undefined || activeMutableCodeProcess
+        || currentFacts.recovery.ownership !== "EXACT"
+        || unresolvedTaskEffects || currentFacts.currentness !== "CURRENT" || recoveryClassification !== "SAFE_TO_CONTINUE") disposableFixtureDeny();
+      const episodeId = `episode-${createHash("sha256").update(`${request.txId}|${request.taskId}`, "utf8").digest("hex").slice(0, 32)}`;
+      const accepted = await remediation.acceptCleanStateReplan(episodeId, {
+        activeMutableCodeProcess, unresolvedTaskEffects, ownership, recovery: recoveryClassification,
+      });
+      const transaction = await service.status(request.txId);
+      if (transaction.decision !== "ALLOW" || transaction.transaction === undefined || transaction.state !== "APPLIED") disposableFixtureDeny();
+      const statePath = join(transaction.transaction.worktreePath, "fixture-state.json");
+      const state = JSON.parse(await readFile(statePath, "utf8")) as Record<string, unknown>;
+      if (state.schema !== "HAIOS_M12_DISPOSABLE_B5_STATE_R1" || state.ready !== "broken"
+        || !Number.isSafeInteger(state.revision)) disposableFixtureDeny();
+      const corrected = Object.freeze({ ...state, ready: "ready", revision: Number(state.revision) + 1 });
+      await writeFile(statePath, `${JSON.stringify(corrected, null, 2)}\n`, "utf8");
+      return Object.freeze({ accepted: accepted.replanUsed, episodeId, transactionId: request.txId });
+    },
+    measureRemediationNegativeTerminals: async () => {
+      const baseHeadSha = await git.head(canonicalReal);
+      const observation = (episodeId: string, transactionId: string, coarse: string, fine: string) => Object.freeze({
+        episodeId, projectId: "operator-canary" as const, repositoryIdentity: canonicalReal, transactionId, baseHeadSha,
+        failure: "REMEDIATION_ELIGIBLE_FAILURE" as const, fingerprint: Object.freeze({ coarse, fine }),
+        invariant: Object.freeze({ name: "FIXTURE_STATE", value: "UNCHANGED" }), authority: "AUTHORIZED" as const,
+        currentness: "CURRENT" as const, emergency: "NONE" as const, recovery: "SAFE_TO_CONTINUE" as const,
+      });
+      const stagnationEpisode = "fixture-stagnation";
+      const stagnationObservation = observation(stagnationEpisode, "txn_fixture_stagnation", "a".repeat(64), "b".repeat(64));
+      await remediation.record(stagnationObservation);
+      await remediation.record(stagnationObservation);
+      await remediation.acceptCleanStateReplan(stagnationEpisode, {
+        activeMutableCodeProcess: false, unresolvedTaskEffects: false, ownership: "UNAMBIGUOUS", recovery: "SAFE_TO_CONTINUE",
+      });
+      const stagnation = await remediation.record(stagnationObservation);
+      const stagnationStored = await remediationStore.load(stagnationEpisode);
+      const budgetEpisode = "fixture-budget";
+      let budget = await remediation.record(observation(budgetEpisode, "txn_fixture_budget", "c".repeat(64), "d".repeat(64)));
+      for (const coarse of ["e", "f", "0", "1"]) {
+        budget = await remediation.record(observation(budgetEpisode, "txn_fixture_budget", coarse.repeat(64), "d".repeat(64)));
+      }
+      const budgetStored = await remediationStore.load(budgetEpisode);
+      return Object.freeze({
+        stagnation: Object.freeze({ directive: stagnation.directive, durable: stagnationStored?.attempt === 3 && stagnationStored.replanUsed }),
+        budget: Object.freeze({ directive: budget.directive, durable: budgetStored?.attempt === 5 && !budgetStored.replanUsed }),
+      });
+    },
+  });
 }

@@ -21,6 +21,8 @@ export interface OperatorTransactionGit {
   mergeFastForward(cwd: string, checkpoint: string): Promise<string>;
 }
 
+export type OperatorTransactionBranchReader = (worktreePath: string) => Promise<string>;
+
 export type OperatorTransactionRecoveryDecision =
   | "SAFE_TO_CONTINUE"
   | "SAFE_TO_ROLLBACK"
@@ -38,6 +40,8 @@ export interface OperatorTransactionServiceConfig {
   readonly allowedProjects: Readonly<Record<string, string>>;
   readonly git: OperatorTransactionGit;
   readonly recovery?: OperatorTransactionRecoveryCoordinator;
+  /** Recovery cleanup requires an exact, independently injected worktree branch identity reader. */
+  readonly readCurrentWorktreeBranch?: OperatorTransactionBranchReader;
 }
 
 export type OperatorTransactionResult =
@@ -150,6 +154,7 @@ export class OperatorTransactionService {
   readonly #allowedProjects: Readonly<Record<string, string>>;
   readonly #git: OperatorTransactionGit;
   readonly #recovery: OperatorTransactionRecoveryCoordinator | undefined;
+  readonly #readCurrentWorktreeBranch: OperatorTransactionBranchReader | undefined;
   readonly #records = new Map<string, MutableRecord>();
   readonly #repositoryIdentity = new Map<string, string>();
 
@@ -158,6 +163,7 @@ export class OperatorTransactionService {
     this.#allowedProjects = Object.freeze({ ...config.allowedProjects });
     this.#git = config.git;
     this.#recovery = config.recovery;
+    this.#readCurrentWorktreeBranch = config.readCurrentWorktreeBranch;
   }
 
   async #commonDirAbsolute(cwd: string): Promise<string | null> {
@@ -345,17 +351,25 @@ export class OperatorTransactionService {
     const expectedIdentity = this.#repositoryIdentity.get(record.txId);
     if (expectedIdentity === undefined) return false;
     if (this.#recovery !== undefined) {
-      const expectedHead = record.state === "PROMOTED" && record.checkpointId !== undefined
-        ? record.checkpointId : record.baseHeadSha;
       try {
-        if ((await this.#git.head(record.canonicalRoot)) !== expectedHead) return false;
+        const canonicalHead = await this.#git.head(record.canonicalRoot);
         if ((await this.#git.status(record.canonicalRoot)).trim().length !== 0) return false;
+        if (record.state === "PROMOTED") {
+          if (record.checkpointId === undefined || canonicalHead !== record.checkpointId) return false;
+        } else if (canonicalHead !== record.baseHeadSha
+          && !(await this.#git.isAncestor(record.canonicalRoot, record.baseHeadSha, canonicalHead))) return false;
       } catch { return false; }
     }
     const canonicalIdentity = await this.#commonDirAbsolute(record.canonicalRoot);
     const worktreeIdentity = await this.#commonDirAbsolute(record.worktreePath);
     if (canonicalIdentity === null || worktreeIdentity === null) return false;
     if (!samePath(canonicalIdentity, expectedIdentity) || !samePath(worktreeIdentity, expectedIdentity)) return false;
+    if (this.#recovery !== undefined) {
+      try {
+        if (this.#readCurrentWorktreeBranch === undefined
+          || (await this.#readCurrentWorktreeBranch(record.worktreePath)) !== record.branchName) return false;
+      } catch { return false; }
+    }
     try { await this.#git.worktreeRemove(record.canonicalRoot, record.worktreePath); }
     catch { return false; }
     try { await this.#git.deleteBranch(record.canonicalRoot, record.branchName); }

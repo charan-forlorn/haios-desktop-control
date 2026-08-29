@@ -13,8 +13,10 @@ import { validateM12ActiveCanaryConfig } from "./m12-active-canary-config.js";
 export {
   createM12ActiveCanaryOperatorRuntime,
   createM12ActiveCanaryReadinessMetadata,
+  createM12DisposableB5FixtureRuntime,
   type M12ActiveCanaryOperatorRuntime,
   type M12ActiveCanaryReadinessMetadata,
+  type M12DisposableB5FixtureRuntime,
 } from "./m12-active-canary-operator-core.js";
 export { M12RecoveryLeaseHeartbeat, scanM12CanonicalGitCommonDirForLocks } from "./m12-active-canary-operator-core.js";
 
