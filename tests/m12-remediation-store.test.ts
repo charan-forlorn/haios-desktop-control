@@ -205,7 +205,7 @@ describe("M12 durable remediation episode store", () => {
     const { stateRoot, store, episodeId } = await fixture();
     const sourceRoot = await mkdtemp(join(tmpdir(), "m12-remediation-store-replacement-"));
     roots.push(sourceRoot);
-    const replacement = await new RemediationStore(sourceRoot).save(snapshot(episodeId, 2));
+    const replacement = await new RemediationStore(sourceRoot).save({ ...snapshot(episodeId, 2), replanUsed: true });
     const remediationDirectory = join(stateRoot, "remediation");
     await mkdir(remediationDirectory, { recursive: true });
     const recordPath = join(remediationDirectory, `${episodeId}.json`);
@@ -262,24 +262,24 @@ describe("M12 durable remediation episode store", () => {
 
   it("persists a hash-bound pending replan proof and fails closed when that proof is corrupt after reload", async () => {
     const { stateRoot, store, episodeId } = await fixture();
-    const first = await store.save(snapshot(episodeId, 1));
-    const second = await store.saveReplanRequiredTransition(first, snapshot(episodeId, 2));
+    await store.save(snapshot(episodeId, 1));
+    const second = await store.save(snapshot(episodeId, 2));
 
     await expect(new RemediationStore(stateRoot).load(episodeId)).resolves.toMatchObject({ hash: second.hash, attempt: 2 });
 
-    await writeFile(join(stateRoot, "remediation", `${episodeId}.pending-replan.json`), "{corrupt", "utf8");
+    await writeFile(join(stateRoot, "remediation", `${episodeId}.transition-lineage.json`), "{corrupt", "utf8");
     await expect(new RemediationStore(stateRoot).load(episodeId))
       .rejects.toThrow("M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED");
   });
 
   it("invalidates a pending replan proof in the same durable mutation that moves the episode beyond it", async () => {
     const { stateRoot, store, episodeId } = await fixture();
-    const first = await store.save(snapshot(episodeId, 1));
-    await store.saveReplanRequiredTransition(first, snapshot(episodeId, 2));
+    await store.save(snapshot(episodeId, 1));
+    await store.save(snapshot(episodeId, 2));
 
     const moved = await store.save({ ...snapshot(episodeId, 3), fineFingerprint: "d".repeat(64) });
 
-    await expect(readdir(join(stateRoot, "remediation"))).resolves.not.toContain(`${episodeId}.pending-replan.json`);
+    await expect(readdir(join(stateRoot, "remediation"))).resolves.not.toContain(`${episodeId}.transition-lineage.json`);
     await expect(store.load(episodeId)).resolves.toMatchObject({ hash: moved.hash, attempt: 3 });
     await expect(store.acceptPendingReplan(episodeId)).rejects.toThrow("M12_REMEDIATION_STATE_DENIED");
   });

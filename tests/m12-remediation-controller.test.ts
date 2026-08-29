@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -259,4 +259,49 @@ describe("M12 bounded remediation controller transition matrix", () => {
     await expect(reloaded.acceptCleanStateReplan("episode-001", cleanStatePreconditions()))
       .rejects.toThrow("M12_REMEDIATION_CONTROLLER_DENIED");
   });
+
+  it("fails closed when the required REPLAN_REQUIRED attempt-two lineage is externally deleted", async () => {
+    const { stateRoot, controller } = await controllerFixture();
+    await controller.record(observation());
+    await expect(controller.record(observation({ fingerprint: { coarse: COARSE_A, fine: FINE_B } })))
+      .resolves.toEqual({ directive: "REPLAN_REQUIRED", attempt: 2, replanUsed: false });
+
+    await unlink(join(stateRoot, "remediation", "episode-001.transition-lineage.json"));
+
+    await expect(new RemediationStore(stateRoot).load("episode-001"))
+      .rejects.toThrow("M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED");
+    await expect(new RemediationController(new RemediationStore(stateRoot)).record(observation({
+      fingerprint: { coarse: COARSE_B, fine: FINE_B },
+    }))).rejects.toThrow("M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED");
+  });
+
+  it("persists RETRY_SAME_PLAN lineage for a normal different-coarse attempt-two transition and fails closed if deleted", async () => {
+    const { stateRoot, controller } = await controllerFixture();
+    await controller.record(observation());
+    await expect(controller.record(observation({ fingerprint: { coarse: COARSE_B, fine: FINE_B } })))
+      .resolves.toEqual({ directive: "RETRY_SAME_PLAN", attempt: 2, replanUsed: false });
+
+    const lineagePath = join(stateRoot, "remediation", "episode-001.transition-lineage.json");
+    await expect(readFile(lineagePath, "utf8")).resolves.toContain('"directive":"RETRY_SAME_PLAN"');
+    await expect(new RemediationStore(stateRoot).load("episode-001")).resolves.toMatchObject({ attempt: 2, replanUsed: false });
+
+    await unlink(lineagePath);
+    await expect(new RemediationStore(stateRoot).load("episode-001"))
+      .rejects.toThrow("M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED");
+  });
+  it("durably records an attempt-two safety failure and revokes stale replan authority", async () => {
+    const { controller, store } = await controllerFixture();
+    await controller.record(observation());
+    await expect(controller.record(observation({ fingerprint: { coarse: COARSE_A, fine: FINE_B } })))
+      .resolves.toEqual({ directive: "REPLAN_REQUIRED", attempt: 2, replanUsed: false });
+
+    await expect(controller.record(observation({
+      authority: "UNKNOWN",
+      fingerprint: { coarse: COARSE_A, fine: FINE_A },
+    }))).resolves.toEqual({ directive: "MANUAL_RECONCILIATION_REQUIRED", attempt: 2, replanUsed: false });
+    await expect(store.load("episode-001")).resolves.toMatchObject({ attempt: 2, fineFingerprint: FINE_A });
+    await expect(controller.acceptCleanStateReplan("episode-001", cleanStatePreconditions()))
+      .rejects.toThrow("M12_REMEDIATION_CONTROLLER_DENIED");
+  });
+
 });

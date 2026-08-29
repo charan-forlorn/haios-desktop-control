@@ -73,26 +73,29 @@ interface StoredTombstone extends PinnedFile {
   readonly tombstone: RemovalTombstone;
 }
 
-interface PendingReplanProof {
-  readonly schema: "HAIOS_M12_PENDING_REPLAN_R1";
+type TransitionLineageDirective = "RETRY_SAME_PLAN" | "REPLAN_REQUIRED";
+
+interface TransitionLineage {
+  readonly schema: "HAIOS_M12_TRANSITION_LINEAGE_R1";
   readonly episodeId: string;
   readonly previousRecordHash: string;
   readonly recordHash: string;
   readonly attempt: 2;
+  readonly directive: TransitionLineageDirective;
   readonly coarseFingerprint: string;
   readonly progressFact: string;
   readonly hash: string;
 }
 
-interface StoredPendingReplanProof extends PinnedFile {
-  readonly proof: PendingReplanProof;
+interface StoredTransitionLineage extends PinnedFile {
+  readonly lineage: TransitionLineage;
 }
 
 interface StorePaths {
   readonly pin: DirectoryPin;
   readonly recordPath: string;
   readonly tombstonePath: string;
-  readonly pendingReplanPath: string;
+  readonly transitionLineagePath: string;
 }
 
 interface MutationState {
@@ -105,8 +108,8 @@ const SNAPSHOT_FIELDS = new Set([
 ]);
 const RECORD_FIELDS = new Set([...SNAPSHOT_FIELDS, "hash"]);
 const TOMBSTONE_FIELDS = new Set(["schema", "episodeId", "recordHash", "hash"]);
-const PENDING_REPLAN_FIELDS = new Set([
-  "schema", "episodeId", "previousRecordHash", "recordHash", "attempt", "coarseFingerprint", "progressFact", "hash",
+const TRANSITION_LINEAGE_FIELDS = new Set([
+  "schema", "episodeId", "previousRecordHash", "recordHash", "attempt", "directive", "coarseFingerprint", "progressFact", "hash",
 ]);
 const RECOVERY_VALUES = new Set<RemediationRecovery>([
   "SAFE_TO_CONTINUE", "SAFE_TO_ROLLBACK", "MANUAL_RECONCILIATION_REQUIRED",
@@ -225,56 +228,75 @@ function canonicalTombstoneJson(tombstone: RemovalTombstone): string {
   });
 }
 
-function pendingReplanHash(proof: Omit<PendingReplanProof, "hash">): string {
+function transitionLineageHash(lineage: Omit<TransitionLineage, "hash">): string {
   return sha256({
-    schema: proof.schema,
-    episodeId: proof.episodeId,
-    previousRecordHash: proof.previousRecordHash,
-    recordHash: proof.recordHash,
-    attempt: proof.attempt,
-    coarseFingerprint: proof.coarseFingerprint,
-    progressFact: proof.progressFact,
+    schema: lineage.schema,
+    episodeId: lineage.episodeId,
+    previousRecordHash: lineage.previousRecordHash,
+    recordHash: lineage.recordHash,
+    attempt: lineage.attempt,
+    directive: lineage.directive,
+    coarseFingerprint: lineage.coarseFingerprint,
+    progressFact: lineage.progressFact,
   });
 }
 
-function isReplanRequiredTransition(previous: RemediationEpisodeRecord, current: RemediationEpisodeRecord): boolean {
-  return previous.episodeId === current.episodeId
-    && previous.projectId === current.projectId
-    && previous.repositoryIdentity === current.repositoryIdentity
-    && previous.transactionId === current.transactionId
-    && previous.baseHeadSha === current.baseHeadSha
-    && previous.attempt === 1
-    && current.attempt === 2
-    && !previous.replanUsed
-    && !current.replanUsed
-    && previous.coarseFingerprint === current.coarseFingerprint
-    && previous.progressFact === current.progressFact;
+function isAttemptTwoUnreplanned(record: RemediationEpisodeRecord): boolean {
+  return record.attempt === 2 && !record.replanUsed;
 }
 
-function pendingReplanFor(previous: RemediationEpisodeRecord, current: RemediationEpisodeRecord, error: string): PendingReplanProof {
-  if (!isReplanRequiredTransition(previous, current)) return deny(error);
+function transitionLineageFor(previous: RemediationEpisodeRecord, current: RemediationEpisodeRecord, error: string): TransitionLineage {
+  if (previous.episodeId !== current.episodeId
+    || previous.projectId !== current.projectId
+    || previous.repositoryIdentity !== current.repositoryIdentity
+    || previous.transactionId !== current.transactionId
+    || previous.baseHeadSha !== current.baseHeadSha
+    || previous.attempt !== 1
+    || previous.replanUsed
+    || !isAttemptTwoUnreplanned(current)) {
+    return deny(error);
+  }
+  const replanRequired = previous.coarseFingerprint === current.coarseFingerprint
+    && previous.progressFact === current.progressFact;
   const unsigned = {
-    schema: "HAIOS_M12_PENDING_REPLAN_R1" as const,
+    schema: "HAIOS_M12_TRANSITION_LINEAGE_R1" as const,
     episodeId: current.episodeId,
     previousRecordHash: previous.hash,
     recordHash: current.hash,
     attempt: 2 as const,
+    directive: replanRequired ? "REPLAN_REQUIRED" as const : "RETRY_SAME_PLAN" as const,
     coarseFingerprint: current.coarseFingerprint,
     progressFact: current.progressFact,
   };
-  return Object.freeze({ ...unsigned, hash: pendingReplanHash(unsigned) });
+  return Object.freeze({ ...unsigned, hash: transitionLineageHash(unsigned) });
 }
 
-function canonicalPendingReplanJson(proof: PendingReplanProof): string {
+function rebindAttemptTwoLineage(lineage: TransitionLineage, current: RemediationEpisodeRecord, error: string): TransitionLineage {
+  if (!isAttemptTwoUnreplanned(current)) return deny(error);
+  const unsigned = {
+    schema: "HAIOS_M12_TRANSITION_LINEAGE_R1" as const,
+    episodeId: current.episodeId,
+    previousRecordHash: lineage.previousRecordHash,
+    recordHash: current.hash,
+    attempt: 2 as const,
+    directive: "RETRY_SAME_PLAN" as const,
+    coarseFingerprint: current.coarseFingerprint,
+    progressFact: current.progressFact,
+  };
+  return Object.freeze({ ...unsigned, hash: transitionLineageHash(unsigned) });
+}
+
+function canonicalTransitionLineageJson(lineage: TransitionLineage): string {
   return canonicalJson({
-    schema: proof.schema,
-    episodeId: proof.episodeId,
-    previousRecordHash: proof.previousRecordHash,
-    recordHash: proof.recordHash,
-    attempt: proof.attempt,
-    coarseFingerprint: proof.coarseFingerprint,
-    progressFact: proof.progressFact,
-    hash: proof.hash,
+    schema: lineage.schema,
+    episodeId: lineage.episodeId,
+    previousRecordHash: lineage.previousRecordHash,
+    recordHash: lineage.recordHash,
+    attempt: lineage.attempt,
+    directive: lineage.directive,
+    coarseFingerprint: lineage.coarseFingerprint,
+    progressFact: lineage.progressFact,
+    hash: lineage.hash,
   });
 }
 
@@ -327,26 +349,33 @@ function normalizeTombstone(value: unknown, error: string): RemovalTombstone {
   return Object.freeze({ schema: "HAIOS_M12_REMEDIATION_TOMBSTONE_R1" as const, episodeId, recordHash, hash: tombstoneRecordHash });
 }
 
-function normalizePendingReplanProof(value: unknown, error: string): PendingReplanProof {
-  const fields = ownDataFields(value, PENDING_REPLAN_FIELDS, PENDING_REPLAN_FIELDS, error);
-  if (fields.get("schema") !== "HAIOS_M12_PENDING_REPLAN_R1" || fields.get("attempt") !== 2) return deny(error);
+function transitionLineageDirective(value: unknown, error: string): TransitionLineageDirective {
+  if (value !== "RETRY_SAME_PLAN" && value !== "REPLAN_REQUIRED") return deny(error);
+  return value;
+}
+
+function normalizeTransitionLineage(value: unknown, error: string): TransitionLineage {
+  const fields = ownDataFields(value, TRANSITION_LINEAGE_FIELDS, TRANSITION_LINEAGE_FIELDS, error);
+  if (fields.get("schema") !== "HAIOS_M12_TRANSITION_LINEAGE_R1" || fields.get("attempt") !== 2) return deny(error);
   const unsigned = {
-    schema: "HAIOS_M12_PENDING_REPLAN_R1" as const,
+    schema: "HAIOS_M12_TRANSITION_LINEAGE_R1" as const,
     episodeId: episodeIdentifier(fields.get("episodeId"), error),
     previousRecordHash: hash(fields.get("previousRecordHash"), error),
     recordHash: hash(fields.get("recordHash"), error),
     attempt: 2 as const,
+    directive: transitionLineageDirective(fields.get("directive"), error),
     coarseFingerprint: hash(fields.get("coarseFingerprint"), error),
     progressFact: identifier(fields.get("progressFact"), error),
   };
-  const proofHash = hash(fields.get("hash"), error);
-  if (proofHash !== pendingReplanHash(unsigned)) return deny(error);
-  return Object.freeze({ ...unsigned, hash: proofHash });
+  const lineageHash = hash(fields.get("hash"), error);
+  if (lineageHash !== transitionLineageHash(unsigned)) return deny(error);
+  return Object.freeze({ ...unsigned, hash: lineageHash });
 }
 
-function assertPendingReplanMatchesRecord(proof: PendingReplanProof, record: RemediationEpisodeRecord, error: string): void {
-  if (record.episodeId !== proof.episodeId || record.hash !== proof.recordHash || record.attempt !== proof.attempt
-    || record.replanUsed || record.coarseFingerprint !== proof.coarseFingerprint || record.progressFact !== proof.progressFact) {
+function assertTransitionLineageMatchesRecord(lineage: TransitionLineage, record: RemediationEpisodeRecord, error: string): void {
+  if (record.episodeId !== lineage.episodeId || record.hash !== lineage.recordHash || record.attempt !== lineage.attempt
+    || record.attempt !== 2 || record.replanUsed || record.coarseFingerprint !== lineage.coarseFingerprint
+    || record.progressFact !== lineage.progressFact) {
     deny(error);
   }
 }
@@ -394,15 +423,20 @@ export class RemediationStore {
       await this.#assertNoResidue(paths.pin);
       const tombstone = await this.#readTombstone(paths.tombstonePath, paths.pin, requestedEpisodeId, true);
       const stored = await this.#readRecord(paths.recordPath, paths.pin, requestedEpisodeId, true);
-      const pendingReplan = await this.#readPendingReplanProof(paths.pendingReplanPath, paths.pin, requestedEpisodeId, true);
+      const lineage = await this.#readTransitionLineage(paths.transitionLineagePath, paths.pin, requestedEpisodeId, true);
       if (tombstone !== undefined && (stored === undefined || tombstone.tombstone.recordHash !== stored.record.hash)) {
         deny(M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
       }
-      if (pendingReplan !== undefined && (stored === undefined || tombstone !== undefined)) {
+      if (lineage !== undefined && (stored === undefined || tombstone !== undefined)) {
         deny(M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
       }
-      if (pendingReplan !== undefined && stored !== undefined) {
-        assertPendingReplanMatchesRecord(pendingReplan.proof, stored.record, M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
+      if (lineage !== undefined && stored !== undefined) {
+        if (!isAttemptTwoUnreplanned(stored.record)) deny(M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
+        assertTransitionLineageMatchesRecord(lineage.lineage, stored.record, M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
+      }
+      // A durable attempt-two, unreplanned record implies a mandatory lineage companion.
+      if (stored !== undefined && isAttemptTwoUnreplanned(stored.record) && lineage === undefined) {
+        deny(M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
       }
       await this.#assertDirectory(paths.pin);
       await this.#assertNoResidue(paths.pin);
@@ -420,46 +454,40 @@ export class RemediationStore {
         deny(M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
       }
       const existing = await this.#readRecord(paths.recordPath, paths.pin, snapshot.episodeId, true);
-      const pendingReplan = await this.#readPendingReplanProof(paths.pendingReplanPath, paths.pin, snapshot.episodeId, true);
-      if (pendingReplan !== undefined && (existing === undefined || !isVerifiedRemediationEpisodeRecord(existing.record))) {
-        deny(M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
-      }
-      if (pendingReplan !== undefined && existing !== undefined) {
-        assertPendingReplanMatchesRecord(pendingReplan.proof, existing.record, M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
-      }
-      if (existing !== undefined) {
-        this.#assertTransition(existing.record, record);
-        if (existing.record.hash === record.hash) return existing.record;
-        await this.#publish(paths.recordPath, paths.pin, canonicalRecordJson(record), existing, state);
-        if (pendingReplan !== undefined) await this.#removePinned(paths.pendingReplanPath, paths.pin, pendingReplan.identity);
-      } else {
-        if (pendingReplan !== undefined) deny(M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
+      const lineage = await this.#readTransitionLineage(paths.transitionLineagePath, paths.pin, snapshot.episodeId, true);
+      if (existing === undefined) {
+        if (lineage !== undefined) deny(M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
+        if (isAttemptTwoUnreplanned(record)) deny(M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
         await this.#publish(paths.recordPath, paths.pin, canonicalRecordJson(record), undefined, state);
+        return record;
+      }
+
+      this.#assertTransition(existing.record, record);
+      if (existing.record.hash === record.hash) return existing.record;
+
+      if (isAttemptTwoUnreplanned(existing.record)) {
+        if (lineage === undefined) deny(M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
+        assertTransitionLineageMatchesRecord(lineage.lineage, existing.record, M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
+        if (isAttemptTwoUnreplanned(record)) {
+          const rebound = rebindAttemptTwoLineage(lineage.lineage, record, M12_REMEDIATION_STATE_DENIED);
+          await this.#publish(paths.recordPath, paths.pin, canonicalRecordJson(record), existing, state);
+          await this.#publish(paths.transitionLineagePath, paths.pin, canonicalTransitionLineageJson(rebound), lineage, state);
+          return record;
+        }
+        await this.#publish(paths.recordPath, paths.pin, canonicalRecordJson(record), existing, state);
+        await this.#removePinned(paths.transitionLineagePath, paths.pin, lineage.identity);
+        return record;
+      }
+
+      if (lineage !== undefined) deny(M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
+      const created = isAttemptTwoUnreplanned(record)
+        ? transitionLineageFor(existing.record, record, M12_REMEDIATION_STATE_DENIED)
+        : undefined;
+      await this.#publish(paths.recordPath, paths.pin, canonicalRecordJson(record), existing, state);
+      if (created !== undefined) {
+        await this.#publish(paths.transitionLineagePath, paths.pin, canonicalTransitionLineageJson(created), undefined, state);
       }
       return record;
-    });
-  }
-
-  async saveReplanRequiredTransition(previous: RemediationEpisodeRecord, input: RemediationEpisodeSnapshot | RemediationEpisodeRecord): Promise<RemediationEpisodeRecord> {
-    if (!isVerifiedRemediationEpisodeRecord(previous)) {
-      deny(M12_REMEDIATION_STATE_DENIED);
-    }
-    const snapshot = normalizeSnapshot(input, M12_REMEDIATION_STATE_DENIED);
-    const current = verifiedRecord(snapshot);
-    const proof = pendingReplanFor(previous, current, M12_REMEDIATION_STATE_DENIED);
-    const paths = await this.#paths(current.episodeId);
-    return this.#withMutation(paths, current.episodeId, "save-replan-required", async (state) => {
-      if (await this.#readTombstone(paths.tombstonePath, paths.pin, current.episodeId, true) !== undefined) {
-        deny(M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
-      }
-      const stored = await this.#readRecord(paths.recordPath, paths.pin, current.episodeId, false);
-      const pendingReplan = await this.#readPendingReplanProof(paths.pendingReplanPath, paths.pin, current.episodeId, true);
-      if (stored === undefined || stored.record.hash !== previous.hash) deny(M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
-      if (pendingReplan !== undefined) deny(M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
-      this.#assertTransition(stored.record, current);
-      await this.#publish(paths.recordPath, paths.pin, canonicalRecordJson(current), stored, state);
-      await this.#publish(paths.pendingReplanPath, paths.pin, canonicalPendingReplanJson(proof), undefined, state);
-      return current;
     });
   }
 
@@ -470,14 +498,21 @@ export class RemediationStore {
         deny(M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
       }
       const stored = await this.#readRecord(paths.recordPath, paths.pin, requestedEpisodeId, false);
-      const pendingReplan = await this.#readPendingReplanProof(paths.pendingReplanPath, paths.pin, requestedEpisodeId, true);
-      if (stored === undefined || pendingReplan === undefined) deny(M12_REMEDIATION_STATE_DENIED);
-      assertPendingReplanMatchesRecord(pendingReplan.proof, stored.record, M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
+      const lineage = await this.#readTransitionLineage(paths.transitionLineagePath, paths.pin, requestedEpisodeId, true);
+      if (stored === undefined) deny(M12_REMEDIATION_STATE_DENIED);
+      if (!isAttemptTwoUnreplanned(stored.record)) {
+        if (lineage !== undefined) deny(M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
+        deny(M12_REMEDIATION_STATE_DENIED);
+      }
+      if (lineage === undefined) deny(M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
+      assertTransitionLineageMatchesRecord(lineage.lineage, stored.record, M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
+      // A retry lineage must never authorize a replan; only REPLAN_REQUIRED may.
+      if (lineage.lineage.directive !== "REPLAN_REQUIRED") deny(M12_REMEDIATION_STATE_DENIED);
       const { hash: _verifiedHash, ...snapshot } = stored.record;
       const accepted = verifiedRecord(Object.freeze({ ...snapshot, replanUsed: true }));
       this.#assertTransition(stored.record, accepted);
       await this.#publish(paths.recordPath, paths.pin, canonicalRecordJson(accepted), stored, state);
-      await this.#removePinned(paths.pendingReplanPath, paths.pin, pendingReplan.identity);
+      await this.#removePinned(paths.transitionLineagePath, paths.pin, lineage.identity);
       return accepted;
     });
   }
@@ -487,22 +522,23 @@ export class RemediationStore {
     await this.#withMutation(paths, requestedEpisodeId, "remove", async (state) => {
       const tombstone = await this.#readTombstone(paths.tombstonePath, paths.pin, requestedEpisodeId, true);
       const existing = await this.#readRecord(paths.recordPath, paths.pin, requestedEpisodeId, true);
-      const pendingReplan = await this.#readPendingReplanProof(paths.pendingReplanPath, paths.pin, requestedEpisodeId, true);
+      const lineage = await this.#readTransitionLineage(paths.transitionLineagePath, paths.pin, requestedEpisodeId, true);
       if (tombstone !== undefined) {
-        if ((existing !== undefined && existing.record.hash !== tombstone.tombstone.recordHash) || pendingReplan !== undefined) {
+        if ((existing !== undefined && existing.record.hash !== tombstone.tombstone.recordHash) || lineage !== undefined) {
           deny(M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
         }
         return;
       }
       if (existing === undefined) {
-        if (pendingReplan !== undefined) deny(M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
+        if (lineage !== undefined) deny(M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
         return;
       }
-      if (pendingReplan !== undefined) {
-        assertPendingReplanMatchesRecord(pendingReplan.proof, existing.record, M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
+      if (lineage !== undefined) {
+        if (!isAttemptTwoUnreplanned(existing.record)) deny(M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
+        assertTransitionLineageMatchesRecord(lineage.lineage, existing.record, M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
       }
       await this.#publish(paths.tombstonePath, paths.pin, canonicalTombstoneJson(tombstoneFor(existing.record)), undefined, state);
-      if (pendingReplan !== undefined) await this.#removePinned(paths.pendingReplanPath, paths.pin, pendingReplan.identity);
+      if (lineage !== undefined) await this.#removePinned(paths.transitionLineagePath, paths.pin, lineage.identity);
     });
   }
 
@@ -571,10 +607,10 @@ export class RemediationStore {
     const pin = await this.#stateDirectory();
     const recordPath = resolve(pin.directory, `${safeEpisodeId}.json`);
     const tombstonePath = resolve(pin.directory, `${safeEpisodeId}.removed.json`);
-    const pendingReplanPath = resolve(pin.directory, `${safeEpisodeId}.pending-replan.json`);
+    const transitionLineagePath = resolve(pin.directory, `${safeEpisodeId}.transition-lineage.json`);
     if (!containedBy(pin.directory, recordPath) || !containedBy(pin.directory, tombstonePath)
-      || !containedBy(pin.directory, pendingReplanPath)) deny(M12_REMEDIATION_STATE_DENIED);
-    return Object.freeze({ pin, recordPath, tombstonePath, pendingReplanPath });
+      || !containedBy(pin.directory, transitionLineagePath)) deny(M12_REMEDIATION_STATE_DENIED);
+    return Object.freeze({ pin, recordPath, tombstonePath, transitionLineagePath });
   }
 
   async #stateDirectory(): Promise<DirectoryPin> {
@@ -690,13 +726,13 @@ export class RemediationStore {
     }
   }
 
-  async #readPendingReplanProof(path: string, pin: DirectoryPin, expectedEpisodeId: string, allowMissing: boolean): Promise<StoredPendingReplanProof | undefined> {
+  async #readTransitionLineage(path: string, pin: DirectoryPin, expectedEpisodeId: string, allowMissing: boolean): Promise<StoredTransitionLineage | undefined> {
     const pinned = await this.#readPinned(path, pin, allowMissing);
     if (pinned === undefined) return undefined;
     try {
-      const proof = normalizePendingReplanProof(JSON.parse(pinned.content) as unknown, M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
-      if (proof.episodeId !== expectedEpisodeId) deny(M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
-      return Object.freeze({ ...pinned, proof });
+      const lineage = normalizeTransitionLineage(JSON.parse(pinned.content) as unknown, M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
+      if (lineage.episodeId !== expectedEpisodeId) deny(M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
+      return Object.freeze({ ...pinned, lineage });
     } catch (error) {
       if (errorCode(error) === M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED) throw error;
       return deny(M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);

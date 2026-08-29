@@ -250,12 +250,7 @@ export class RemediationController {
       const previous = await this.#store.load(observation.episodeId);
       const result = decideRemediation(previous, observationInput);
       if (observation.failure === "NOT_A_FAILURE") return result;
-      if (result.directive === "REPLAN_REQUIRED") {
-        if (previous === undefined) deny();
-        await this.#store.saveReplanRequiredTransition(previous, eligibleFailureSnapshot(observation, result));
-      } else {
-        await this.#store.save(eligibleFailureSnapshot(observation, result));
-      }
+      await this.#store.save(eligibleFailureSnapshot(observation, result));
       return result;
     });
   }
