@@ -11,7 +11,7 @@
 **Spec:** `docs/superpowers/specs/2026-08-29-m11-active-canary-preparation-design.md`
 
 ## Global Constraints
-- Parent is exact M10 candidate `f476f719be42ee40fe6ae5358930dc1662a95d3e` plus M11 docs commits.
+- Parent is exact M10 candidate `a497bc694e84dcc787f3d85449767e015d86db1a` plus M11 docs commits.
 - Live `127.0.0.1:8769` remains M10 `READ_ONLY_EMERGENCY` during pre-live work.
 - Shared `:8768` and both existing tunnel routes are not mutated.
 - Only production project admitted by M11 is `operator-canary -> C:\Workspace\haios-operator-canary`.

@@ -3,7 +3,7 @@
 ## 1. Purpose
 M11 prepares the certified control plane for the first production `ACTIVE` canary without activating production during implementation or pre-live qualification.
 
-Parent candidate: `f476f719be42ee40fe6ae5358930dc1662a95d3e` (M10 supervisor-remediated candidate).
+Parent candidate: `a497bc694e84dcc787f3d85449767e015d86db1a` (M10 supervisor-remediated candidate).
 
 M10 production remains authoritative and live as `READ_ONLY_EMERGENCY` on `127.0.0.1:8769` throughout M11 pre-live work. The dedicated tunnel remains pointed at `host.docker.internal:8769`; the shared Secure MCP route on `:8768` is immutable.
 

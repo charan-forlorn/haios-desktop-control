@@ -171,8 +171,8 @@ describe("M11 independent-review remediation contracts", () => {
   it("hard-binds the trusted M10 final-cert location and proof identities", async () => {
     const [preflight, execute, rollback] = await sources();
     const exactCert = "C:\\Workspace\\haios-desktop-control-m10\\evidence\\m10\\final\\m10-final-certification.json";
-    const m10Head = "f476f719be42ee40fe6ae5358930dc1662a95d3e";
-    const m10Manifest = "8582819a33800d9949011f6ac07b07248b163fa19ddd8d3fd1d1e47bddd7a36f";
+    const m10Head = "a497bc694e84dcc787f3d85449767e015d86db1a";
+    const m10Manifest = "a69253eb501f79bfa706d932129dfe7f6b33dae36e760f7737419fc59fba20ea";
     for (const source of [preflight, execute, rollback]) {
       expect(source).toContain(exactCert);
       expect(source).toContain(m10Head);
