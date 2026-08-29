@@ -242,12 +242,14 @@ export class RemediationStore {
   }
 
   async load(requestedEpisodeId: string): Promise<RemediationEpisodeRecord | undefined> {
-    const paths = await this.#paths(requestedEpisodeId);
-    await this.#assertNoResidue(paths.pin);
-    const stored = await this.#readRecord(paths.recordPath, paths.pin, requestedEpisodeId, true);
-    await this.#assertDirectory(paths.pin);
-    await this.#assertNoResidue(paths.pin);
-    return stored?.record;
+    return this.#withRead(async () => {
+      const paths = await this.#paths(requestedEpisodeId);
+      await this.#assertNoResidue(paths.pin);
+      const stored = await this.#readRecord(paths.recordPath, paths.pin, requestedEpisodeId, true);
+      await this.#assertDirectory(paths.pin);
+      await this.#assertNoResidue(paths.pin);
+      return stored?.record;
+    });
   }
 
   async save(input: RemediationEpisodeSnapshot | RemediationEpisodeRecord): Promise<RemediationEpisodeRecord> {
@@ -297,6 +299,18 @@ export class RemediationStore {
       || previous.repositoryIdentity !== next.repositoryIdentity || previous.transactionId !== next.transactionId
       || previous.baseHeadSha !== next.baseHeadSha || next.attempt < previous.attempt
       || (previous.replanUsed && !next.replanUsed)) deny(M12_REMEDIATION_STATE_DENIED);
+  }
+
+  async #withRead<T>(action: () => Promise<T>): Promise<T> {
+    const prior = this.#mutationTail;
+    let release: (() => void) | undefined;
+    this.#mutationTail = new Promise<void>((resolveGate) => { release = resolveGate; });
+    await prior.catch(() => undefined);
+    try {
+      return await action();
+    } finally {
+      release?.();
+    }
   }
 
   async #withMutation<T>(paths: StorePaths, episodeId: string, operation: "save" | "remove", action: (state: MutationState) => Promise<T>): Promise<T> {

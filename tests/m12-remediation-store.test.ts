@@ -2,7 +2,41 @@ import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+const concurrency = vi.hoisted(() => ({
+  pauseMove: false,
+  moveReached: undefined as (() => void) | undefined,
+  releaseMove: undefined as (() => void) | undefined,
+  failTemporaryWrite: false,
+}));
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    rename: async (...args: Parameters<typeof actual.rename>) => {
+      const result = await actual.rename(...args);
+      if (concurrency.pauseMove && String(args[0]).endsWith("episode-001.json") && String(args[1]).includes(".m12-")) {
+        concurrency.pauseMove = false;
+        concurrency.moveReached?.();
+        await new Promise<void>((resolvePause) => { concurrency.releaseMove = resolvePause; });
+      }
+      return result;
+    },
+    open: async (...args: Parameters<typeof actual.open>) => {
+      const handle = await actual.open(...args);
+      if (!concurrency.failTemporaryWrite || !String(args[0]).includes(".m12-temp-") || args[1] !== "wx") return handle;
+      concurrency.failTemporaryWrite = false;
+      return new Proxy(handle, {
+        get(target, property, receiver) {
+          if (property === "writeFile") return async () => { throw new Error("injected temporary write failure"); };
+          return Reflect.get(target, property, receiver);
+        },
+      });
+    },
+  };
+});
 
 import {
   RemediationStore,
@@ -12,6 +46,11 @@ import {
 const roots: string[] = [];
 
 afterEach(async () => {
+  concurrency.pauseMove = false;
+  concurrency.failTemporaryWrite = false;
+  concurrency.releaseMove?.();
+  concurrency.moveReached = undefined;
+  concurrency.releaseMove = undefined;
   await Promise.all(roots.splice(0).map(async (root) => rm(root, { recursive: true, force: true })));
 });
 
@@ -162,6 +201,23 @@ describe("M12 durable remediation episode store", () => {
     ]);
 
     await expect(store.load(episodeId)).resolves.toMatchObject({ attempt: 3, replanUsed: false });
+  });
+
+  it("serializes a load behind an update that has moved the current record", async () => {
+    const { store, episodeId } = await fixture();
+    await store.save(snapshot(episodeId, 1));
+    const moveReached = new Promise<void>((resolveReached) => { concurrency.moveReached = resolveReached; });
+    concurrency.pauseMove = true;
+    const updating = store.save(snapshot(episodeId, 2));
+    await moveReached;
+
+    const loading = store.load(episodeId).then(
+      (record) => ({ outcome: "resolved" as const, record }),
+      (error: unknown) => ({ outcome: "rejected" as const, error }),
+    );
+    concurrency.releaseMove?.();
+    await expect(updating).resolves.toMatchObject({ attempt: 2 });
+    await expect(loading).resolves.toMatchObject({ outcome: "resolved", record: { attempt: 2 } });
   });
 
   it.each([
