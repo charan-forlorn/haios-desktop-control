@@ -170,18 +170,30 @@ describe("M10 sealed cutover transaction contract", () => {
     const health = rollback.indexOf("OPERATOR_EMERGENCY_HEALTH_FAILED", restoreOperator);
     const restoreDedicated = rollback.indexOf("operator-dedicated-tunnel-client", health);
     const dedicatedRoute = rollback.indexOf("M10_DEDICATED_RESTORE_ROUTE_FAILED", restoreDedicated);
-    const shared = rollback.indexOf("M10_ROLLBACK_SHARED_TUNNEL_DRIFT", dedicatedRoute);
+    const dedicatedMount = rollback.indexOf("M10_DEDICATED_RESTORE_MOUNT_FAILED", dedicatedRoute);
+    const dedicatedResidue = rollback.indexOf("M10_DEDICATED_RESTORE_M10_KEY_RESIDUE", dedicatedMount);
+    const dedicatedTrue = rollback.indexOf("$RollbackResult.dedicated_restored=$true", dedicatedResidue);
+    const shared = rollback.indexOf("M10_ROLLBACK_SHARED_TUNNEL_DRIFT", dedicatedTrue);
     const secure8768 = rollback.indexOf("M10_ROLLBACK_8768_DRIFT", shared);
-    const terminal = rollback.indexOf("HAIOS_DESKTOP_CONTROL_PLANE_R1_M10_ROLLED_BACK_TO_CERTIFIED_M09_READ_ONLY_STATE", secure8768);
-    for (const index of [stopTask, portFree, restoreOperator, health, restoreDedicated, dedicatedRoute, shared, secure8768, terminal]) expect(index).toBeGreaterThanOrEqual(0);
+    const cleanup = rollback.indexOf("git.exe -C $Root worktree remove", secure8768);
+    const finalShared = rollback.lastIndexOf("M10_ROLLBACK_SHARED_TUNNEL_DRIFT");
+    const final8768 = rollback.lastIndexOf("M10_ROLLBACK_8768_DRIFT");
+    const terminal = rollback.indexOf("HAIOS_DESKTOP_CONTROL_PLANE_R1_M10_ROLLED_BACK_TO_CERTIFIED_M09_READ_ONLY_STATE", final8768);
+    for (const index of [stopTask, portFree, restoreOperator, health, restoreDedicated, dedicatedRoute, dedicatedMount, dedicatedResidue, dedicatedTrue, shared, secure8768, cleanup, finalShared, final8768, terminal]) expect(index).toBeGreaterThanOrEqual(0);
     expect(stopTask).toBeLessThan(portFree);
     expect(portFree).toBeLessThan(restoreOperator);
     expect(restoreOperator).toBeLessThan(health);
     expect(health).toBeLessThan(restoreDedicated);
     expect(restoreDedicated).toBeLessThan(dedicatedRoute);
-    expect(dedicatedRoute).toBeLessThan(shared);
+    expect(dedicatedRoute).toBeLessThan(dedicatedMount);
+    expect(dedicatedMount).toBeLessThan(dedicatedResidue);
+    expect(dedicatedResidue).toBeLessThan(dedicatedTrue);
+    expect(dedicatedTrue).toBeLessThan(shared);
     expect(shared).toBeLessThan(secure8768);
-    expect(secure8768).toBeLessThan(terminal);
+    expect(secure8768).toBeLessThan(cleanup);
+    expect(cleanup).toBeLessThan(finalShared);
+    expect(finalShared).toBeLessThan(final8768);
+    expect(final8768).toBeLessThan(terminal);
   });
 
   it("does not accept caller-controlled production resource names or paths", async () => {
