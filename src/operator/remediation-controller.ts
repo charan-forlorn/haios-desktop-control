@@ -2,6 +2,7 @@ import { type FailureFingerprint } from "./remediation-fingerprint.js";
 import {
   M12_REMEDIATION_STATE_DENIED,
   RemediationStore,
+  isVerifiedRemediationEpisodeRecord,
   type RemediationEpisodeRecord,
   type RemediationEpisodeSnapshot,
   type RemediationRecovery,
@@ -63,10 +64,6 @@ const OBSERVATION_FIELDS = new Set([
 const INVARIANT_FIELDS = new Set(["name", "value"]);
 const FINGERPRINT_FIELDS = new Set(["coarse", "fine"]);
 const PRECONDITION_FIELDS = new Set(["activeMutableCodeProcess", "unresolvedTaskEffects", "ownership", "recovery"]);
-const RECORD_FIELDS = new Set([
-  "schema", "episodeId", "projectId", "repositoryIdentity", "transactionId", "baseHeadSha", "attempt", "replanUsed",
-  "coarseFingerprint", "fineFingerprint", "progressFact", "recovery", "hash",
-]);
 const RECOVERY_VALUES = new Set<RemediationRecovery>([
   "SAFE_TO_CONTINUE", "SAFE_TO_ROLLBACK", "MANUAL_RECONCILIATION_REQUIRED",
 ]);
@@ -168,30 +165,6 @@ function normalizeObservation(value: unknown): NormalizedObservation {
   });
 }
 
-function normalizeRecord(value: RemediationEpisodeRecord): RemediationEpisodeRecord {
-  const fields = ownDataFields(value, RECORD_FIELDS, RECORD_FIELDS);
-  if (fields.get("schema") !== "HAIOS_M12_REMEDIATION_EPISODE_R1" || fields.get("projectId") !== "operator-canary") return deny();
-  const storedAttempt = fields.get("attempt");
-  const replanUsed = fields.get("replanUsed");
-  if (typeof storedAttempt !== "number" || !Number.isSafeInteger(storedAttempt) || storedAttempt < 1 || storedAttempt > 5
-    || typeof replanUsed !== "boolean") return deny();
-  return Object.freeze({
-    schema: "HAIOS_M12_REMEDIATION_EPISODE_R1" as const,
-    episodeId: episodeId(fields.get("episodeId")),
-    projectId: "operator-canary" as const,
-    repositoryIdentity: repositoryIdentity(fields.get("repositoryIdentity")),
-    transactionId: identifier(fields.get("transactionId")),
-    baseHeadSha: headSha(fields.get("baseHeadSha")),
-    attempt: storedAttempt,
-    replanUsed,
-    coarseFingerprint: sha(fields.get("coarseFingerprint")),
-    fineFingerprint: sha(fields.get("fineFingerprint")),
-    progressFact: identifier(fields.get("progressFact")),
-    recovery: recovery(fields.get("recovery")),
-    hash: sha(fields.get("hash")),
-  });
-}
-
 function assertSameEpisode(previous: RemediationEpisodeRecord, observation: NormalizedObservation): void {
   if (previous.episodeId !== observation.episodeId || previous.projectId !== observation.projectId
     || previous.repositoryIdentity !== observation.repositoryIdentity || previous.transactionId !== observation.transactionId
@@ -213,7 +186,8 @@ function decision(directive: RemediationDirective, attempt: number, replanUsed: 
 
 export function decideRemediation(previousInput: RemediationEpisodeRecord | undefined, observationInput: RemediationObservation): RemediationDecision {
   const observation = normalizeObservation(observationInput);
-  const previous = previousInput === undefined ? undefined : normalizeRecord(previousInput);
+  if (previousInput !== undefined && !isVerifiedRemediationEpisodeRecord(previousInput)) deny();
+  const previous = previousInput;
   if (previous !== undefined) assertSameEpisode(previous, observation);
   const currentAttempt = previous?.attempt ?? 1;
   const replanUsed = previous?.replanUsed ?? false;
@@ -275,8 +249,13 @@ export class RemediationController {
       const observation = normalizeObservation(observationInput);
       const previous = await this.#store.load(observation.episodeId);
       const result = decideRemediation(previous, observationInput);
-      if (observation.failure !== "REMEDIATION_ELIGIBLE_FAILURE" || result.attempt === previous?.attempt) return result;
-      await this.#store.save(eligibleFailureSnapshot(observation, result));
+      if (observation.failure === "NOT_A_FAILURE") return result;
+      if (result.directive === "REPLAN_REQUIRED") {
+        if (previous === undefined) deny();
+        await this.#store.saveReplanRequiredTransition(previous, eligibleFailureSnapshot(observation, result));
+      } else {
+        await this.#store.save(eligibleFailureSnapshot(observation, result));
+      }
       return result;
     });
   }
@@ -289,8 +268,12 @@ export class RemediationController {
         || preconditions.recovery !== "SAFE_TO_CONTINUE") deny();
       const previous = await this.#store.load(id);
       if (previous === undefined || previous.replanUsed || previous.recovery !== "SAFE_TO_CONTINUE") deny();
-      const { hash: _verifiedHash, ...snapshot } = previous;
-      return this.#store.save({ ...snapshot, replanUsed: true });
+      try {
+        return await this.#store.acceptPendingReplan(id);
+      } catch (error) {
+        if (error instanceof Error && error.message === M12_REMEDIATION_STATE_DENIED) deny();
+        throw error;
+      }
     });
   }
 

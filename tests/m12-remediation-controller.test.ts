@@ -76,6 +76,13 @@ function episode(overrides: Partial<RemediationEpisodeRecord> = {}): Remediation
   };
 }
 
+async function verifiedEpisode(overrides: Partial<RemediationEpisodeRecord> = {}): Promise<RemediationEpisodeRecord> {
+  const stateRoot = await mkdtemp(join(tmpdir(), "m12-remediation-controller-prior-"));
+  roots.push(stateRoot);
+  const { hash: _unverifiedHash, ...snapshot } = episode(overrides);
+  return new RemediationStore(stateRoot).save(snapshot);
+}
+
 function cleanStatePreconditions(overrides: Partial<CleanStateReplanPreconditions> = {}): CleanStateReplanPreconditions {
   return {
     activeMutableCodeProcess: false,
@@ -90,7 +97,7 @@ async function controllerFixture() {
   const stateRoot = await mkdtemp(join(tmpdir(), "m12-remediation-controller-"));
   roots.push(stateRoot);
   const store = new RemediationStore(stateRoot);
-  return { store, controller: new RemediationController(store) };
+  return { stateRoot, store, controller: new RemediationController(store) };
 }
 
 describe("M12 bounded remediation controller transition matrix", () => {
@@ -102,16 +109,16 @@ describe("M12 bounded remediation controller transition matrix", () => {
     });
   });
 
-  it("requires the one clean-state replan after the same coarse failure makes no objective progress", () => {
-    expect(decideRemediation(episode(), observation({ fingerprint: { coarse: COARSE_A, fine: FINE_B } }))).toEqual({
+  it("requires the one clean-state replan after the same coarse failure makes no objective progress", async () => {
+    expect(decideRemediation(await verifiedEpisode(), observation({ fingerprint: { coarse: COARSE_A, fine: FINE_B } }))).toEqual({
       directive: "REPLAN_REQUIRED",
       attempt: 2,
       replanUsed: false,
     });
   });
 
-  it("permits retry when a server-owned invariant changed, not merely when a fine fingerprint or prose changes", () => {
-    const previous = episode({ progressFact: `CANONICAL_HEAD:${HEAD_A}` });
+  it("permits retry when a server-owned invariant changed, not merely when a fine fingerprint or prose changes", async () => {
+    const previous = await verifiedEpisode({ progressFact: `CANONICAL_HEAD:${HEAD_A}` });
 
     expect(decideRemediation(previous, observation({
       fingerprint: { coarse: COARSE_A, fine: FINE_B },
@@ -124,8 +131,8 @@ describe("M12 bounded remediation controller transition matrix", () => {
     } as unknown as RemediationObservation))).toThrow("M12_REMEDIATION_CONTROLLER_DENIED");
   });
 
-  it("stagnates rather than using a second replan after an accepted replan", () => {
-    const previous = episode({ attempt: 2, replanUsed: true });
+  it("stagnates rather than using a second replan after an accepted replan", async () => {
+    const previous = await verifiedEpisode({ attempt: 2, replanUsed: true });
 
     expect(decideRemediation(previous, observation())).toEqual({
       directive: "AUTONOMOUS_REMEDIATION_STAGNATED",
@@ -134,8 +141,8 @@ describe("M12 bounded remediation controller transition matrix", () => {
     });
   });
 
-  it("exhausts the autonomous budget on the fifth remediation-eligible failure", () => {
-    expect(decideRemediation(episode({ attempt: 4 }), observation({ fingerprint: { coarse: COARSE_B, fine: FINE_B } }))).toEqual({
+  it("exhausts the autonomous budget on the fifth remediation-eligible failure", async () => {
+    expect(decideRemediation(await verifiedEpisode({ attempt: 4 }), observation({ fingerprint: { coarse: COARSE_B, fine: FINE_B } }))).toEqual({
       directive: "AUTONOMOUS_REMEDIATION_BUDGET_EXHAUSTED",
       attempt: 5,
       replanUsed: false,
@@ -171,6 +178,16 @@ describe("M12 bounded remediation controller transition matrix", () => {
       .toThrow("M12_REMEDIATION_CONTROLLER_DENIED");
   });
 
+  it("rejects a fabricated hash-shaped prior record while accepting a store-verified record", async () => {
+    const verified = await verifiedEpisode();
+    const fabricated = { ...verified };
+
+    expect(() => decideRemediation(fabricated, observation({ fingerprint: { coarse: COARSE_A, fine: FINE_B } })))
+      .toThrow("M12_REMEDIATION_CONTROLLER_DENIED");
+    expect(decideRemediation(verified, observation({ fingerprint: { coarse: COARSE_A, fine: FINE_B } })))
+      .toMatchObject({ directive: "REPLAN_REQUIRED", attempt: 2 });
+  });
+
   it("records only a durably saved remediation-eligible failure and retains the server decision", async () => {
     const { controller, store } = await controllerFixture();
 
@@ -194,8 +211,29 @@ describe("M12 bounded remediation controller transition matrix", () => {
     await expect(store.load("episode-001")).resolves.toMatchObject({ attempt: 1 });
   });
 
-  it("accepts exactly one replan only after all clean-state preconditions are proven", async () => {
+  it("persists every eligible unsafe or budget failure before returning its directive", async () => {
     const { controller, store } = await controllerFixture();
+    await controller.record(observation());
+
+    await expect(controller.record(observation({
+      fingerprint: { coarse: COARSE_A, fine: FINE_B },
+      authority: "UNKNOWN",
+    }))).resolves.toEqual({ directive: "MANUAL_RECONCILIATION_REQUIRED", attempt: 1, replanUsed: false });
+    await expect(store.load("episode-001")).resolves.toMatchObject({
+      attempt: 1,
+      fineFingerprint: FINE_B,
+      recovery: "SAFE_TO_CONTINUE",
+    });
+
+    const { hash: _unverifiedHash, ...attemptFive } = episode({ attempt: 5 });
+    await store.save({ ...attemptFive, fineFingerprint: FINE_A });
+    await expect(controller.record(observation({ fingerprint: { coarse: COARSE_B, fine: FINE_B } })))
+      .resolves.toEqual({ directive: "AUTONOMOUS_REMEDIATION_BUDGET_EXHAUSTED", attempt: 5, replanUsed: false });
+    await expect(store.load("episode-001")).resolves.toMatchObject({ attempt: 5, fineFingerprint: FINE_B });
+  });
+
+  it("accepts one replan only after the durable second same-coarse transition proof survives reload", async () => {
+    const { stateRoot, controller, store } = await controllerFixture();
     await controller.record(observation());
 
     for (const preconditions of [
@@ -210,9 +248,15 @@ describe("M12 bounded remediation controller transition matrix", () => {
     }
 
     await expect(controller.acceptCleanStateReplan("episode-001", cleanStatePreconditions()))
-      .resolves.toMatchObject({ attempt: 1, replanUsed: true, recovery: "SAFE_TO_CONTINUE" });
+      .rejects.toThrow("M12_REMEDIATION_CONTROLLER_DENIED");
+    await expect(controller.record(observation({ fingerprint: { coarse: COARSE_A, fine: FINE_B } })))
+      .resolves.toEqual({ directive: "REPLAN_REQUIRED", attempt: 2, replanUsed: false });
+
+    const reloaded = new RemediationController(new RemediationStore(stateRoot));
+    await expect(reloaded.acceptCleanStateReplan("episode-001", cleanStatePreconditions()))
+      .resolves.toMatchObject({ attempt: 2, replanUsed: true, recovery: "SAFE_TO_CONTINUE" });
     await expect(store.load("episode-001")).resolves.toMatchObject({ replanUsed: true });
-    await expect(controller.acceptCleanStateReplan("episode-001", cleanStatePreconditions()))
+    await expect(reloaded.acceptCleanStateReplan("episode-001", cleanStatePreconditions()))
       .rejects.toThrow("M12_REMEDIATION_CONTROLLER_DENIED");
   });
 });

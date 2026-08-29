@@ -28,6 +28,13 @@ export interface RemediationEpisodeRecord extends RemediationEpisodeSnapshot {
   readonly hash: string;
 }
 
+const verifiedRecords = new WeakSet<object>();
+
+/** A record is authoritative only when it was produced by this store instance. */
+export function isVerifiedRemediationEpisodeRecord(value: unknown): value is RemediationEpisodeRecord {
+  return typeof value === "object" && value !== null && verifiedRecords.has(value);
+}
+
 type JsonValue = string | number | boolean | null | { readonly [key: string]: JsonValue };
 
 interface FileIdentity {
@@ -66,10 +73,26 @@ interface StoredTombstone extends PinnedFile {
   readonly tombstone: RemovalTombstone;
 }
 
+interface PendingReplanProof {
+  readonly schema: "HAIOS_M12_PENDING_REPLAN_R1";
+  readonly episodeId: string;
+  readonly previousRecordHash: string;
+  readonly recordHash: string;
+  readonly attempt: 2;
+  readonly coarseFingerprint: string;
+  readonly progressFact: string;
+  readonly hash: string;
+}
+
+interface StoredPendingReplanProof extends PinnedFile {
+  readonly proof: PendingReplanProof;
+}
+
 interface StorePaths {
   readonly pin: DirectoryPin;
   readonly recordPath: string;
   readonly tombstonePath: string;
+  readonly pendingReplanPath: string;
 }
 
 interface MutationState {
@@ -82,6 +105,9 @@ const SNAPSHOT_FIELDS = new Set([
 ]);
 const RECORD_FIELDS = new Set([...SNAPSHOT_FIELDS, "hash"]);
 const TOMBSTONE_FIELDS = new Set(["schema", "episodeId", "recordHash", "hash"]);
+const PENDING_REPLAN_FIELDS = new Set([
+  "schema", "episodeId", "previousRecordHash", "recordHash", "attempt", "coarseFingerprint", "progressFact", "hash",
+]);
 const RECOVERY_VALUES = new Set<RemediationRecovery>([
   "SAFE_TO_CONTINUE", "SAFE_TO_ROLLBACK", "MANUAL_RECONCILIATION_REQUIRED",
 ]);
@@ -173,6 +199,12 @@ function canonicalRecordJson(record: RemediationEpisodeRecord): string {
   });
 }
 
+function verifiedRecord(snapshot: RemediationEpisodeSnapshot): RemediationEpisodeRecord {
+  const record = Object.freeze({ ...snapshot, hash: payloadHash(snapshot) });
+  verifiedRecords.add(record);
+  return record;
+}
+
 function tombstoneHash(episodeId: string, recordHash: string): string {
   return sha256({ schema: "HAIOS_M12_REMEDIATION_TOMBSTONE_R1", episodeId, recordHash });
 }
@@ -190,6 +222,59 @@ function tombstoneFor(record: RemediationEpisodeRecord): RemovalTombstone {
 function canonicalTombstoneJson(tombstone: RemovalTombstone): string {
   return canonicalJson({
     schema: tombstone.schema, episodeId: tombstone.episodeId, recordHash: tombstone.recordHash, hash: tombstone.hash,
+  });
+}
+
+function pendingReplanHash(proof: Omit<PendingReplanProof, "hash">): string {
+  return sha256({
+    schema: proof.schema,
+    episodeId: proof.episodeId,
+    previousRecordHash: proof.previousRecordHash,
+    recordHash: proof.recordHash,
+    attempt: proof.attempt,
+    coarseFingerprint: proof.coarseFingerprint,
+    progressFact: proof.progressFact,
+  });
+}
+
+function isReplanRequiredTransition(previous: RemediationEpisodeRecord, current: RemediationEpisodeRecord): boolean {
+  return previous.episodeId === current.episodeId
+    && previous.projectId === current.projectId
+    && previous.repositoryIdentity === current.repositoryIdentity
+    && previous.transactionId === current.transactionId
+    && previous.baseHeadSha === current.baseHeadSha
+    && previous.attempt === 1
+    && current.attempt === 2
+    && !previous.replanUsed
+    && !current.replanUsed
+    && previous.coarseFingerprint === current.coarseFingerprint
+    && previous.progressFact === current.progressFact;
+}
+
+function pendingReplanFor(previous: RemediationEpisodeRecord, current: RemediationEpisodeRecord, error: string): PendingReplanProof {
+  if (!isReplanRequiredTransition(previous, current)) return deny(error);
+  const unsigned = {
+    schema: "HAIOS_M12_PENDING_REPLAN_R1" as const,
+    episodeId: current.episodeId,
+    previousRecordHash: previous.hash,
+    recordHash: current.hash,
+    attempt: 2 as const,
+    coarseFingerprint: current.coarseFingerprint,
+    progressFact: current.progressFact,
+  };
+  return Object.freeze({ ...unsigned, hash: pendingReplanHash(unsigned) });
+}
+
+function canonicalPendingReplanJson(proof: PendingReplanProof): string {
+  return canonicalJson({
+    schema: proof.schema,
+    episodeId: proof.episodeId,
+    previousRecordHash: proof.previousRecordHash,
+    recordHash: proof.recordHash,
+    attempt: proof.attempt,
+    coarseFingerprint: proof.coarseFingerprint,
+    progressFact: proof.progressFact,
+    hash: proof.hash,
   });
 }
 
@@ -227,7 +312,9 @@ function normalizeRecord(value: unknown, error: string): RemediationEpisodeRecor
   const snapshot = snapshotFromFields(fields, error);
   const recordHash = hash(fields.get("hash"), error);
   if (recordHash !== payloadHash(snapshot)) return deny(error);
-  return Object.freeze({ ...snapshot, hash: recordHash });
+  const record = Object.freeze({ ...snapshot, hash: recordHash });
+  verifiedRecords.add(record);
+  return record;
 }
 
 function normalizeTombstone(value: unknown, error: string): RemovalTombstone {
@@ -238,6 +325,30 @@ function normalizeTombstone(value: unknown, error: string): RemovalTombstone {
   const tombstoneRecordHash = hash(fields.get("hash"), error);
   if (tombstoneRecordHash !== tombstoneHash(episodeId, recordHash)) return deny(error);
   return Object.freeze({ schema: "HAIOS_M12_REMEDIATION_TOMBSTONE_R1" as const, episodeId, recordHash, hash: tombstoneRecordHash });
+}
+
+function normalizePendingReplanProof(value: unknown, error: string): PendingReplanProof {
+  const fields = ownDataFields(value, PENDING_REPLAN_FIELDS, PENDING_REPLAN_FIELDS, error);
+  if (fields.get("schema") !== "HAIOS_M12_PENDING_REPLAN_R1" || fields.get("attempt") !== 2) return deny(error);
+  const unsigned = {
+    schema: "HAIOS_M12_PENDING_REPLAN_R1" as const,
+    episodeId: episodeIdentifier(fields.get("episodeId"), error),
+    previousRecordHash: hash(fields.get("previousRecordHash"), error),
+    recordHash: hash(fields.get("recordHash"), error),
+    attempt: 2 as const,
+    coarseFingerprint: hash(fields.get("coarseFingerprint"), error),
+    progressFact: identifier(fields.get("progressFact"), error),
+  };
+  const proofHash = hash(fields.get("hash"), error);
+  if (proofHash !== pendingReplanHash(unsigned)) return deny(error);
+  return Object.freeze({ ...unsigned, hash: proofHash });
+}
+
+function assertPendingReplanMatchesRecord(proof: PendingReplanProof, record: RemediationEpisodeRecord, error: string): void {
+  if (record.episodeId !== proof.episodeId || record.hash !== proof.recordHash || record.attempt !== proof.attempt
+    || record.replanUsed || record.coarseFingerprint !== proof.coarseFingerprint || record.progressFact !== proof.progressFact) {
+    deny(error);
+  }
 }
 
 function identity(stats: Stats): FileIdentity {
@@ -283,8 +394,15 @@ export class RemediationStore {
       await this.#assertNoResidue(paths.pin);
       const tombstone = await this.#readTombstone(paths.tombstonePath, paths.pin, requestedEpisodeId, true);
       const stored = await this.#readRecord(paths.recordPath, paths.pin, requestedEpisodeId, true);
+      const pendingReplan = await this.#readPendingReplanProof(paths.pendingReplanPath, paths.pin, requestedEpisodeId, true);
       if (tombstone !== undefined && (stored === undefined || tombstone.tombstone.recordHash !== stored.record.hash)) {
         deny(M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
+      }
+      if (pendingReplan !== undefined && (stored === undefined || tombstone !== undefined)) {
+        deny(M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
+      }
+      if (pendingReplan !== undefined && stored !== undefined) {
+        assertPendingReplanMatchesRecord(pendingReplan.proof, stored.record, M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
       }
       await this.#assertDirectory(paths.pin);
       await this.#assertNoResidue(paths.pin);
@@ -295,21 +413,72 @@ export class RemediationStore {
 
   async save(input: RemediationEpisodeSnapshot | RemediationEpisodeRecord): Promise<RemediationEpisodeRecord> {
     const snapshot = normalizeSnapshot(input, M12_REMEDIATION_STATE_DENIED);
-    const record = Object.freeze({ ...snapshot, hash: payloadHash(snapshot) });
+    const record = verifiedRecord(snapshot);
     const paths = await this.#paths(snapshot.episodeId);
     return this.#withMutation(paths, snapshot.episodeId, "save", async (state) => {
       if (await this.#readTombstone(paths.tombstonePath, paths.pin, snapshot.episodeId, true) !== undefined) {
         deny(M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
       }
       const existing = await this.#readRecord(paths.recordPath, paths.pin, snapshot.episodeId, true);
+      const pendingReplan = await this.#readPendingReplanProof(paths.pendingReplanPath, paths.pin, snapshot.episodeId, true);
+      if (pendingReplan !== undefined && (existing === undefined || !isVerifiedRemediationEpisodeRecord(existing.record))) {
+        deny(M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
+      }
+      if (pendingReplan !== undefined && existing !== undefined) {
+        assertPendingReplanMatchesRecord(pendingReplan.proof, existing.record, M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
+      }
       if (existing !== undefined) {
         this.#assertTransition(existing.record, record);
         if (existing.record.hash === record.hash) return existing.record;
         await this.#publish(paths.recordPath, paths.pin, canonicalRecordJson(record), existing, state);
+        if (pendingReplan !== undefined) await this.#removePinned(paths.pendingReplanPath, paths.pin, pendingReplan.identity);
       } else {
+        if (pendingReplan !== undefined) deny(M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
         await this.#publish(paths.recordPath, paths.pin, canonicalRecordJson(record), undefined, state);
       }
       return record;
+    });
+  }
+
+  async saveReplanRequiredTransition(previous: RemediationEpisodeRecord, input: RemediationEpisodeSnapshot | RemediationEpisodeRecord): Promise<RemediationEpisodeRecord> {
+    if (!isVerifiedRemediationEpisodeRecord(previous)) {
+      deny(M12_REMEDIATION_STATE_DENIED);
+    }
+    const snapshot = normalizeSnapshot(input, M12_REMEDIATION_STATE_DENIED);
+    const current = verifiedRecord(snapshot);
+    const proof = pendingReplanFor(previous, current, M12_REMEDIATION_STATE_DENIED);
+    const paths = await this.#paths(current.episodeId);
+    return this.#withMutation(paths, current.episodeId, "save-replan-required", async (state) => {
+      if (await this.#readTombstone(paths.tombstonePath, paths.pin, current.episodeId, true) !== undefined) {
+        deny(M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
+      }
+      const stored = await this.#readRecord(paths.recordPath, paths.pin, current.episodeId, false);
+      const pendingReplan = await this.#readPendingReplanProof(paths.pendingReplanPath, paths.pin, current.episodeId, true);
+      if (stored === undefined || stored.record.hash !== previous.hash) deny(M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
+      if (pendingReplan !== undefined) deny(M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
+      this.#assertTransition(stored.record, current);
+      await this.#publish(paths.recordPath, paths.pin, canonicalRecordJson(current), stored, state);
+      await this.#publish(paths.pendingReplanPath, paths.pin, canonicalPendingReplanJson(proof), undefined, state);
+      return current;
+    });
+  }
+
+  async acceptPendingReplan(requestedEpisodeId: string): Promise<RemediationEpisodeRecord> {
+    const paths = await this.#paths(requestedEpisodeId);
+    return this.#withMutation(paths, requestedEpisodeId, "accept-pending-replan", async (state) => {
+      if (await this.#readTombstone(paths.tombstonePath, paths.pin, requestedEpisodeId, true) !== undefined) {
+        deny(M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
+      }
+      const stored = await this.#readRecord(paths.recordPath, paths.pin, requestedEpisodeId, false);
+      const pendingReplan = await this.#readPendingReplanProof(paths.pendingReplanPath, paths.pin, requestedEpisodeId, true);
+      if (stored === undefined || pendingReplan === undefined) deny(M12_REMEDIATION_STATE_DENIED);
+      assertPendingReplanMatchesRecord(pendingReplan.proof, stored.record, M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
+      const { hash: _verifiedHash, ...snapshot } = stored.record;
+      const accepted = verifiedRecord(Object.freeze({ ...snapshot, replanUsed: true }));
+      this.#assertTransition(stored.record, accepted);
+      await this.#publish(paths.recordPath, paths.pin, canonicalRecordJson(accepted), stored, state);
+      await this.#removePinned(paths.pendingReplanPath, paths.pin, pendingReplan.identity);
+      return accepted;
     });
   }
 
@@ -318,12 +487,22 @@ export class RemediationStore {
     await this.#withMutation(paths, requestedEpisodeId, "remove", async (state) => {
       const tombstone = await this.#readTombstone(paths.tombstonePath, paths.pin, requestedEpisodeId, true);
       const existing = await this.#readRecord(paths.recordPath, paths.pin, requestedEpisodeId, true);
+      const pendingReplan = await this.#readPendingReplanProof(paths.pendingReplanPath, paths.pin, requestedEpisodeId, true);
       if (tombstone !== undefined) {
-        if (existing !== undefined && existing.record.hash !== tombstone.tombstone.recordHash) deny(M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
+        if ((existing !== undefined && existing.record.hash !== tombstone.tombstone.recordHash) || pendingReplan !== undefined) {
+          deny(M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
+        }
         return;
       }
-      if (existing === undefined) return;
+      if (existing === undefined) {
+        if (pendingReplan !== undefined) deny(M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
+        return;
+      }
+      if (pendingReplan !== undefined) {
+        assertPendingReplanMatchesRecord(pendingReplan.proof, existing.record, M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
+      }
       await this.#publish(paths.tombstonePath, paths.pin, canonicalTombstoneJson(tombstoneFor(existing.record)), undefined, state);
+      if (pendingReplan !== undefined) await this.#removePinned(paths.pendingReplanPath, paths.pin, pendingReplan.identity);
     });
   }
 
@@ -346,7 +525,7 @@ export class RemediationStore {
     }
   }
 
-  async #withMutation<T>(paths: StorePaths, episodeId: string, operation: "save" | "remove", action: (state: MutationState) => Promise<T>): Promise<T> {
+  async #withMutation<T>(paths: StorePaths, episodeId: string, operation: "save" | "remove" | "save-replan-required" | "accept-pending-replan", action: (state: MutationState) => Promise<T>): Promise<T> {
     const prior = this.#mutationTail;
     let release: (() => void) | undefined;
     this.#mutationTail = new Promise<void>((resolveGate) => { release = resolveGate; });
@@ -392,8 +571,10 @@ export class RemediationStore {
     const pin = await this.#stateDirectory();
     const recordPath = resolve(pin.directory, `${safeEpisodeId}.json`);
     const tombstonePath = resolve(pin.directory, `${safeEpisodeId}.removed.json`);
-    if (!containedBy(pin.directory, recordPath) || !containedBy(pin.directory, tombstonePath)) deny(M12_REMEDIATION_STATE_DENIED);
-    return Object.freeze({ pin, recordPath, tombstonePath });
+    const pendingReplanPath = resolve(pin.directory, `${safeEpisodeId}.pending-replan.json`);
+    if (!containedBy(pin.directory, recordPath) || !containedBy(pin.directory, tombstonePath)
+      || !containedBy(pin.directory, pendingReplanPath)) deny(M12_REMEDIATION_STATE_DENIED);
+    return Object.freeze({ pin, recordPath, tombstonePath, pendingReplanPath });
   }
 
   async #stateDirectory(): Promise<DirectoryPin> {
@@ -503,6 +684,19 @@ export class RemediationStore {
       const tombstone = normalizeTombstone(JSON.parse(pinned.content) as unknown, M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
       if (tombstone.episodeId !== expectedEpisodeId) deny(M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
       return Object.freeze({ ...pinned, tombstone });
+    } catch (error) {
+      if (errorCode(error) === M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED) throw error;
+      return deny(M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
+    }
+  }
+
+  async #readPendingReplanProof(path: string, pin: DirectoryPin, expectedEpisodeId: string, allowMissing: boolean): Promise<StoredPendingReplanProof | undefined> {
+    const pinned = await this.#readPinned(path, pin, allowMissing);
+    if (pinned === undefined) return undefined;
+    try {
+      const proof = normalizePendingReplanProof(JSON.parse(pinned.content) as unknown, M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
+      if (proof.episodeId !== expectedEpisodeId) deny(M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
+      return Object.freeze({ ...pinned, proof });
     } catch (error) {
       if (errorCode(error) === M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED) throw error;
       return deny(M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
