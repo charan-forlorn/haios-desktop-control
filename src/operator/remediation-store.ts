@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { type Stats } from "node:fs";
-import { type FileHandle, link, lstat, mkdir, open, readdir, realpath, rename, unlink } from "node:fs/promises";
+import { type FileHandle, lstat, mkdir, open, readdir, realpath, rename, unlink } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 
 export const REMEDIATION_EPISODE_SCHEMA = "HAIOS_M12_REMEDIATION_EPISODE_R1" as const;
@@ -55,9 +55,21 @@ interface StoredRecord extends PinnedFile {
   readonly record: RemediationEpisodeRecord;
 }
 
+interface RemovalTombstone {
+  readonly schema: "HAIOS_M12_REMEDIATION_TOMBSTONE_R1";
+  readonly episodeId: string;
+  readonly recordHash: string;
+  readonly hash: string;
+}
+
+interface StoredTombstone extends PinnedFile {
+  readonly tombstone: RemovalTombstone;
+}
+
 interface StorePaths {
   readonly pin: DirectoryPin;
   readonly recordPath: string;
+  readonly tombstonePath: string;
 }
 
 interface MutationState {
@@ -69,6 +81,7 @@ const SNAPSHOT_FIELDS = new Set([
   "coarseFingerprint", "fineFingerprint", "progressFact", "recovery",
 ]);
 const RECORD_FIELDS = new Set([...SNAPSHOT_FIELDS, "hash"]);
+const TOMBSTONE_FIELDS = new Set(["schema", "episodeId", "recordHash", "hash"]);
 const RECOVERY_VALUES = new Set<RemediationRecovery>([
   "SAFE_TO_CONTINUE", "SAFE_TO_ROLLBACK", "MANUAL_RECONCILIATION_REQUIRED",
 ]);
@@ -160,6 +173,26 @@ function canonicalRecordJson(record: RemediationEpisodeRecord): string {
   });
 }
 
+function tombstoneHash(episodeId: string, recordHash: string): string {
+  return sha256({ schema: "HAIOS_M12_REMEDIATION_TOMBSTONE_R1", episodeId, recordHash });
+}
+
+function tombstoneFor(record: RemediationEpisodeRecord): RemovalTombstone {
+  const recordHash = record.hash;
+  return Object.freeze({
+    schema: "HAIOS_M12_REMEDIATION_TOMBSTONE_R1" as const,
+    episodeId: record.episodeId,
+    recordHash,
+    hash: tombstoneHash(record.episodeId, recordHash),
+  });
+}
+
+function canonicalTombstoneJson(tombstone: RemovalTombstone): string {
+  return canonicalJson({
+    schema: tombstone.schema, episodeId: tombstone.episodeId, recordHash: tombstone.recordHash, hash: tombstone.hash,
+  });
+}
+
 function snapshotFromFields(fields: ReadonlyMap<string, unknown>, error: string): RemediationEpisodeSnapshot {
   if (fields.get("schema") !== REMEDIATION_EPISODE_SCHEMA || fields.get("projectId") !== "operator-canary") return deny(error);
   const replanUsed = fields.get("replanUsed");
@@ -197,6 +230,16 @@ function normalizeRecord(value: unknown, error: string): RemediationEpisodeRecor
   return Object.freeze({ ...snapshot, hash: recordHash });
 }
 
+function normalizeTombstone(value: unknown, error: string): RemovalTombstone {
+  const fields = ownDataFields(value, TOMBSTONE_FIELDS, TOMBSTONE_FIELDS, error);
+  if (fields.get("schema") !== "HAIOS_M12_REMEDIATION_TOMBSTONE_R1") return deny(error);
+  const episodeId = episodeIdentifier(fields.get("episodeId"), error);
+  const recordHash = hash(fields.get("recordHash"), error);
+  const tombstoneRecordHash = hash(fields.get("hash"), error);
+  if (tombstoneRecordHash !== tombstoneHash(episodeId, recordHash)) return deny(error);
+  return Object.freeze({ schema: "HAIOS_M12_REMEDIATION_TOMBSTONE_R1" as const, episodeId, recordHash, hash: tombstoneRecordHash });
+}
+
 function identity(stats: Stats): FileIdentity {
   return Object.freeze({
     dev: stats.dev, ino: stats.ino, birthtimeMs: stats.birthtimeMs, size: stats.size, mtimeMs: stats.mtimeMs, ctimeMs: stats.ctimeMs,
@@ -206,13 +249,6 @@ function identity(stats: Stats): FileIdentity {
 function sameIdentity(left: FileIdentity, right: FileIdentity): boolean {
   return left.dev === right.dev && left.ino === right.ino && left.birthtimeMs === right.birthtimeMs
     && left.size === right.size && left.mtimeMs === right.mtimeMs && left.ctimeMs === right.ctimeMs;
-}
-
-// NTFS can change ctime when a file gains/loses a hard link or is renamed.  Those
-// operations are intentional here; all other identity and content checks still apply.
-function sameMovedObject(left: FileIdentity, right: FileIdentity): boolean {
-  return left.dev === right.dev && left.ino === right.ino && left.birthtimeMs === right.birthtimeMs
-    && left.size === right.size && left.mtimeMs === right.mtimeMs;
 }
 
 function sameDirectoryObject(left: FileIdentity, right: FileIdentity): boolean {
@@ -245,9 +281,14 @@ export class RemediationStore {
     return this.#withRead(async () => {
       const paths = await this.#paths(requestedEpisodeId);
       await this.#assertNoResidue(paths.pin);
+      const tombstone = await this.#readTombstone(paths.tombstonePath, paths.pin, requestedEpisodeId, true);
       const stored = await this.#readRecord(paths.recordPath, paths.pin, requestedEpisodeId, true);
+      if (tombstone !== undefined && stored !== undefined && tombstone.tombstone.recordHash !== stored.record.hash) {
+        deny(M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
+      }
       await this.#assertDirectory(paths.pin);
       await this.#assertNoResidue(paths.pin);
+      if (tombstone !== undefined) return undefined;
       return stored?.record;
     });
   }
@@ -257,22 +298,16 @@ export class RemediationStore {
     const record = Object.freeze({ ...snapshot, hash: payloadHash(snapshot) });
     const paths = await this.#paths(snapshot.episodeId);
     return this.#withMutation(paths, snapshot.episodeId, "save", async (state) => {
+      if (await this.#readTombstone(paths.tombstonePath, paths.pin, snapshot.episodeId, true) !== undefined) {
+        deny(M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
+      }
       const existing = await this.#readRecord(paths.recordPath, paths.pin, snapshot.episodeId, true);
       if (existing !== undefined) {
         this.#assertTransition(existing.record, record);
         if (existing.record.hash === record.hash) return existing.record;
-        state.dirty = true;
-        const backup = await this.#moveRecord(paths.recordPath, paths.pin, snapshot.episodeId, existing, "backup");
-        try {
-          await this.#publish(paths.recordPath, paths.pin, record);
-          await this.#removePinned(backup.path, paths.pin, backup.identity);
-        } catch (error) {
-          await this.#restoreIfSafe(backup.path, paths.recordPath, paths.pin, existing);
-          throw error;
-        }
+        await this.#publish(paths.recordPath, paths.pin, canonicalRecordJson(record), existing, state);
       } else {
-        state.dirty = true;
-        await this.#publish(paths.recordPath, paths.pin, record);
+        await this.#publish(paths.recordPath, paths.pin, canonicalRecordJson(record), undefined, state);
       }
       return record;
     });
@@ -281,16 +316,14 @@ export class RemediationStore {
   async remove(requestedEpisodeId: string): Promise<void> {
     const paths = await this.#paths(requestedEpisodeId);
     await this.#withMutation(paths, requestedEpisodeId, "remove", async (state) => {
+      const tombstone = await this.#readTombstone(paths.tombstonePath, paths.pin, requestedEpisodeId, true);
       const existing = await this.#readRecord(paths.recordPath, paths.pin, requestedEpisodeId, true);
-      if (existing === undefined) return;
-      state.dirty = true;
-      const tombstone = await this.#moveRecord(paths.recordPath, paths.pin, requestedEpisodeId, existing, "tombstone");
-      try {
-        await this.#removePinned(tombstone.path, paths.pin, tombstone.identity);
-      } catch (error) {
-        await this.#restoreIfSafe(tombstone.path, paths.recordPath, paths.pin, existing);
-        throw error;
+      if (tombstone !== undefined) {
+        if (existing !== undefined && existing.record.hash !== tombstone.tombstone.recordHash) deny(M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
+        return;
       }
+      if (existing === undefined) return;
+      await this.#publish(paths.tombstonePath, paths.pin, canonicalTombstoneJson(tombstoneFor(existing.record)), undefined, state);
     });
   }
 
@@ -358,8 +391,9 @@ export class RemediationStore {
     const safeEpisodeId = episodeIdentifier(requestedEpisodeId, M12_REMEDIATION_STATE_DENIED);
     const pin = await this.#stateDirectory();
     const recordPath = resolve(pin.directory, `${safeEpisodeId}.json`);
-    if (!containedBy(pin.directory, recordPath)) deny(M12_REMEDIATION_STATE_DENIED);
-    return Object.freeze({ pin, recordPath });
+    const tombstonePath = resolve(pin.directory, `${safeEpisodeId}.removed.json`);
+    if (!containedBy(pin.directory, recordPath) || !containedBy(pin.directory, tombstonePath)) deny(M12_REMEDIATION_STATE_DENIED);
+    return Object.freeze({ pin, recordPath, tombstonePath });
   }
 
   async #stateDirectory(): Promise<DirectoryPin> {
@@ -462,6 +496,19 @@ export class RemediationStore {
     }
   }
 
+  async #readTombstone(path: string, pin: DirectoryPin, expectedEpisodeId: string, allowMissing: boolean): Promise<StoredTombstone | undefined> {
+    const pinned = await this.#readPinned(path, pin, allowMissing);
+    if (pinned === undefined) return undefined;
+    try {
+      const tombstone = normalizeTombstone(JSON.parse(pinned.content) as unknown, M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
+      if (tombstone.episodeId !== expectedEpisodeId) deny(M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
+      return Object.freeze({ ...pinned, tombstone });
+    } catch (error) {
+      if (errorCode(error) === M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED) throw error;
+      return deny(M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
+    }
+  }
+
   async #writeExclusive(path: string, content: string): Promise<FileIdentity> {
     let handle: FileHandle | undefined;
     try {
@@ -472,70 +519,50 @@ export class RemediationStore {
       await handle.close();
       handle = undefined;
       return written;
-    } catch {
-      return deny(M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
+    } catch (error) {
+      throw error;
     } finally {
       if (handle !== undefined) await handle.close().catch(() => undefined);
     }
   }
 
-  async #publish(recordPath: string, pin: DirectoryPin, record: RemediationEpisodeRecord): Promise<void> {
+  async #publish(recordPath: string, pin: DirectoryPin, content: string, expected: PinnedFile | undefined, state: MutationState): Promise<void> {
     const temporaryPath = join(pin.directory, `.m12-temp-${randomBytes(24).toString("hex")}`);
-    const recordContent = canonicalRecordJson(record);
-    const temporaryIdentity = await this.#writeExclusive(temporaryPath, recordContent);
-    await this.#assertDirectory(pin);
+    let temporaryIdentity: FileIdentity | undefined;
+    let publicationAmbiguous = false;
     try {
-      await link(temporaryPath, recordPath);
-      const target = await this.#readRecord(recordPath, pin, record.episodeId, false);
-      const temporary = await this.#readPinned(temporaryPath, pin, false);
-      if (target === undefined || temporary === undefined || target.record.hash !== record.hash || target.content !== recordContent
-        || !sameMovedObject(temporaryIdentity, temporary.identity) || !sameMovedObject(temporary.identity, target.identity)) {
+      temporaryIdentity = await this.#writeExclusive(temporaryPath, content);
+      await this.#assertDirectory(pin);
+      const current = await this.#readPinned(recordPath, pin, true);
+      if ((expected === undefined && current !== undefined) || (expected !== undefined && (current === undefined
+        || current.content !== expected.content || !sameIdentity(current.identity, expected.identity)))) {
         deny(M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
       }
       await this.#assertDirectory(pin);
-      await this.#removePinned(temporaryPath, pin, temporary.identity);
+      // Node exposes no no-replace rename on this Windows platform. The precondition and
+      // postcondition are both verified; an uncertain rename preserves reconciliation evidence.
+      publicationAmbiguous = true;
+      state.dirty = true;
+      await rename(temporaryPath, recordPath);
+      const target = await this.#readPinned(recordPath, pin, false);
+      if (target === undefined || target.content !== content
+        || await this.#readPinned(temporaryPath, pin, true) !== undefined) {
+        deny(M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
+      }
+      await this.#assertDirectory(pin);
     } catch (error) {
+      if (!publicationAmbiguous) await this.#removeExactTemporary(temporaryPath, pin);
       if (errorCode(error) === M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED) throw error;
       return deny(M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
     }
   }
 
-  async #moveRecord(recordPath: string, pin: DirectoryPin, episodeId: string, expected: StoredRecord, kind: "backup" | "tombstone"):
-    Promise<{ readonly path: string; readonly identity: FileIdentity }> {
-    const movedPath = join(pin.directory, `.m12-${kind}-${randomBytes(24).toString("hex")}`);
-    await this.#assertDirectory(pin);
-    const current = await this.#readRecord(recordPath, pin, episodeId, false);
-    if (current === undefined || current.content !== expected.content || current.record.hash !== expected.record.hash || !sameIdentity(current.identity, expected.identity)) {
-      deny(M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
-    }
+  async #removeExactTemporary(path: string, pin: DirectoryPin): Promise<void> {
     try {
-      await rename(recordPath, movedPath);
-      const moved = await this.#readRecord(movedPath, pin, episodeId, false);
-      if (moved === undefined || moved.content !== expected.content || moved.record.hash !== expected.record.hash || !sameMovedObject(moved.identity, expected.identity)) {
-        deny(M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
-      }
-      if (await this.#readPinned(recordPath, pin, true) !== undefined) deny(M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
-      await this.#assertDirectory(pin);
-      return Object.freeze({ path: movedPath, identity: moved.identity });
-    } catch (error) {
-      if (errorCode(error) === M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED) throw error;
-      return deny(M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
-    }
-  }
-
-  async #restoreIfSafe(residuePath: string, recordPath: string, pin: DirectoryPin, expected: StoredRecord): Promise<void> {
-    try {
-      await this.#assertDirectory(pin);
-      if (await this.#readPinned(recordPath, pin, true) !== undefined) return;
-      const residue = await this.#readRecord(residuePath, pin, expected.record.episodeId, false);
-      if (residue === undefined || residue.content !== expected.content || residue.record.hash !== expected.record.hash || !sameMovedObject(residue.identity, expected.identity)) return;
-      await link(residuePath, recordPath);
-      const restored = await this.#readRecord(recordPath, pin, expected.record.episodeId, false);
-      if (restored === undefined || restored.content !== expected.content || restored.record.hash !== expected.record.hash || !sameMovedObject(restored.identity, residue.identity)) {
-        deny(M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
-      }
+      const temporary = await this.#readPinned(path, pin, true);
+      if (temporary !== undefined) await this.#removePinned(path, pin, temporary.identity);
     } catch {
-      // The journal and residue deliberately remain for explicit reconciliation.
+      // If the exact artifact cannot be revalidated and removed, it remains as reconciliation evidence.
     }
   }
 

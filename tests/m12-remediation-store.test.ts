@@ -17,7 +17,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
     ...actual,
     rename: async (...args: Parameters<typeof actual.rename>) => {
       const result = await actual.rename(...args);
-      if (concurrency.pauseMove && String(args[0]).endsWith("episode-001.json") && String(args[1]).includes(".m12-")) {
+      if (concurrency.pauseMove && String(args[0]).includes(".m12-temp-") && String(args[1]).endsWith("episode-001.json")) {
         concurrency.pauseMove = false;
         concurrency.moveReached?.();
         await new Promise<void>((resolvePause) => { concurrency.releaseMove = resolvePause; });
@@ -220,6 +220,29 @@ describe("M12 durable remediation episode store", () => {
     await expect(loading).resolves.toMatchObject({ outcome: "resolved", record: { attempt: 2 } });
   });
 
+  it("keeps durable removal evidence and prevents a removed episode from resetting", async () => {
+    const { stateRoot, store, episodeId } = await fixture();
+    const saved = await store.save(snapshot(episodeId, 3));
+    const recordPath = join(stateRoot, "remediation", `${episodeId}.json`);
+
+    await store.remove(episodeId);
+
+    await expect(store.load(episodeId)).resolves.toBeUndefined();
+    expect(JSON.parse(await readFile(recordPath, "utf8"))).toEqual(saved);
+    await expect(readdir(join(stateRoot, "remediation"))).resolves.toContain(`${episodeId}.removed.json`);
+    await expect(store.save(snapshot(episodeId, 1))).rejects.toThrow("M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED");
+  });
+
+  it("cleans an exact pre-publication temporary artifact so a retry is not blocked", async () => {
+    const { stateRoot, store, episodeId } = await fixture();
+    concurrency.failTemporaryWrite = true;
+
+    await expect(store.save(snapshot(episodeId))).rejects.toThrow("M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED");
+    await expect(readdir(join(stateRoot, "remediation"))).resolves.toEqual([]);
+    await expect(store.save(snapshot(episodeId))).resolves.toMatchObject({ attempt: 1 });
+    await expect(store.load(episodeId)).resolves.toMatchObject({ attempt: 1 });
+  });
+
   it.each([
     ["hash mismatch", (record: Record<string, unknown>) => ({ ...record, hash: "0".repeat(64) })],
     ["unknown schema", (record: Record<string, unknown>) => ({ ...record, schema: "HAIOS_M12_REMEDIATION_EPISODE_R2" })],
@@ -274,13 +297,14 @@ describe("M12 durable remediation episode store", () => {
     await expect(readdir(outside)).resolves.toEqual([]);
   });
 
-  it("removes only a validated episode record and returns absent records as undefined", async () => {
+  it("returns absent records as undefined and makes removal logically durable", async () => {
     const { stateRoot, store, episodeId } = await fixture();
     await expect(store.load(episodeId)).resolves.toBeUndefined();
     await store.save(snapshot(episodeId));
     await store.remove(episodeId);
 
     await expect(store.load(episodeId)).resolves.toBeUndefined();
-    await expect(readFile(join(stateRoot, "remediation", `${episodeId}.json`), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(readFile(join(stateRoot, "remediation", `${episodeId}.json`), "utf8")).resolves.toBeDefined();
+    await expect(readdir(join(stateRoot, "remediation"))).resolves.toContain(`${episodeId}.removed.json`);
   });
 });
