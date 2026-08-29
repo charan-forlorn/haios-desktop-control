@@ -68,6 +68,11 @@ describe("M10 adversarial pre-live boundary", () => {
     ]) expect(source).toContain(marker);
   });
 
+  it("pins deterministic LF checkout semantics for byte-exact source manifests", async () => {
+    const attrs = await readFile(join(process.cwd(), ".gitattributes"), "utf8").catch(() => "");
+    expect(attrs).toContain("* text=auto eol=lf");
+  });
+
   it("emits only a no-mutation production decision envelope", async () => {
     const source = await readFile(qualifierPath, "utf8");
     for (const marker of [
