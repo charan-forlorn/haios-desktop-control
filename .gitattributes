@@ -1,1 +1,9 @@
-* text=auto eol=lf
+* text=auto eol=crlf
+.gitattributes text eol=lf
+docs/superpowers/plans/2026-08-28-m10-* text eol=lf
+docs/superpowers/specs/2026-08-28-m10-* text eol=lf
+scripts/*m10* text eol=lf
+src/operator/host-runtime.ts text eol=lf
+src/operator/m10-production-config.ts text eol=lf
+tests/m10-* text eol=lf
+tests/m09-host-runtime.test.ts text eol=lf

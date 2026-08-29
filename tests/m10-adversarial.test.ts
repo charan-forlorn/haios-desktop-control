@@ -68,9 +68,19 @@ describe("M10 adversarial pre-live boundary", () => {
     ]) expect(source).toContain(marker);
   });
 
-  it("pins deterministic LF checkout semantics for byte-exact source manifests", async () => {
+  it("pins deterministic mixed checkout semantics without changing historical byte identities", async () => {
     const attrs = await readFile(join(process.cwd(), ".gitattributes"), "utf8").catch(() => "");
-    expect(attrs).toContain("* text=auto eol=lf");
+    for (const marker of [
+      "* text=auto eol=crlf",
+      ".gitattributes text eol=lf",
+      "docs/superpowers/plans/2026-08-28-m10-* text eol=lf",
+      "docs/superpowers/specs/2026-08-28-m10-* text eol=lf",
+      "scripts/*m10* text eol=lf",
+      "src/operator/host-runtime.ts text eol=lf",
+      "src/operator/m10-production-config.ts text eol=lf",
+      "tests/m10-* text eol=lf",
+      "tests/m09-host-runtime.test.ts text eol=lf",
+    ]) expect(attrs).toContain(marker);
   });
 
   it("emits only a no-mutation production decision envelope", async () => {
