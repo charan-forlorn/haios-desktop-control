@@ -60,8 +60,10 @@ describe("M10 adversarial pre-live boundary", () => {
     for (const marker of [
       "execute-m10-readonly-cutover.ps1", "rollback-m10-readonly-cutover.ps1",
       "m10-preflight.ps1", "qualify-m10-live.ps1", "run-m10-readonly-runtime.mjs",
+      "run-m10-readonly-supervisor.mjs",
       "candidate_manifest_sha256", "executor_sha256", "rollback_sha256",
       "preflight_sha256", "live_qualifier_sha256", "strict_launcher_sha256",
+      "strict_supervisor_sha256",
       "APPROVE HAIOS_DESKTOP_CONTROL_PLANE_R1_M10_STAGED_READ_ONLY_CUTOVER",
     ]) expect(source).toContain(marker);
   });

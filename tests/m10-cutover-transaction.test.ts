@@ -201,4 +201,21 @@ describe("M10 post-cutover live qualifier contract", () => {
       " compose up", " compose down", "docker rm", "Remove-Item -LiteralPath $StateRoot",
     ]) expect(source.toLowerCase()).not.toContain(forbidden.toLowerCase());
   });
+
+  it("binds post-remediation qualification tooling to the durable M10 supervisor", async () => {
+    const live = await readFile(join(process.cwd(), "scripts", "qualify-m10-live.ps1"), "utf8");
+    const prelive = await readFile(join(process.cwd(), "scripts", "qualify-m10-preflight.ps1"), "utf8");
+    expect(live).toContain("run-m10-readonly-supervisor.mjs");
+    expect(live).toContain("$expectedSupervisor");
+    expect(live).not.toContain('$expectedLauncher=Join-Path $DeploymentRoot "scripts\\run-m10-readonly-runtime.mjs"');
+    for (const marker of [
+      "run-m10-readonly-supervisor.mjs",
+      "$StrictSupervisorPath",
+      "$StrictSupervisorSha",
+      "M10_STRICT_SUPERVISOR_HASH_DRIFT",
+      "strict_supervisor_sha256=$StrictSupervisorSha",
+      "tests/m10-supervisor.test.ts",
+      'Task.action_argument).Contains("run-m10-readonly-supervisor.mjs")',
+    ]) expect(prelive).toContain(marker);
+  });
 });

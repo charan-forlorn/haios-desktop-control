@@ -28,6 +28,7 @@ $RollbackPath = Join-Path $Root "scripts\rollback-m10-readonly-cutover.ps1"
 $PreflightPath = Join-Path $Root "scripts\m10-preflight.ps1"
 $LiveQualifierPath = Join-Path $Root "scripts\qualify-m10-live.ps1"
 $StrictLauncherPath = Join-Path $Root "scripts\run-m10-readonly-runtime.mjs"
+$StrictSupervisorPath = Join-Path $Root "scripts\run-m10-readonly-supervisor.mjs"
 function Require-Exit([string]$Name) { if ($LASTEXITCODE -ne 0) { throw "$Name failed with exit $LASTEXITCODE" } }
 function Get-Sha256([string]$Path) { (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant() }
 function Write-JsonNoBom([string]$Path, $Object) {
@@ -152,6 +153,7 @@ $RollbackSha=Get-Sha256 $RollbackPath
 $PreflightSha=Get-Sha256 $PreflightPath
 $LiveQualifierSha=Get-Sha256 $LiveQualifierPath
 $StrictLauncherSha=Get-Sha256 $StrictLauncherPath
+$StrictSupervisorSha=Get-Sha256 $StrictSupervisorPath
 $SharedTunnelReadiness=Get-TunnelFunctionalReadiness "haios-tunnel-client" 8080 "http://haios-local-mcp:8768/healthz"
 $DedicatedTunnelReadiness=Get-TunnelFunctionalReadiness "haios-operator-dedicated-tunnel-client" 8079 "http://operator-mcp:8769/healthz"
 $TunnelReadiness=[ordered]@{shared=$SharedTunnelReadiness;dedicated=$DedicatedTunnelReadiness}
@@ -177,7 +179,7 @@ Write-Host "[1] Focused M10 + inherited security qualification"
 $FocusedLog=Join-Path $EvidenceRoot "focused-tests.log"
 $FocusedTests=@(
   "tests/m10-production-config.test.ts","tests/m10-preflight-contract.test.ts","tests/m10-readonly-parity.test.ts",
-  "tests/m10-cutover-transaction.test.ts","tests/m10-adversarial.test.ts","tests/m09-host-runtime-config.test.ts",
+  "tests/m10-cutover-transaction.test.ts","tests/m10-adversarial.test.ts","tests/m10-supervisor.test.ts","tests/m09-host-runtime-config.test.ts",
   "tests/m09-host-runtime.test.ts","tests/m09-host-launcher.test.ts","tests/m09-live-helper.test.ts",
   "tests/m09-tunnel-parity.test.ts","tests/m09-adversarial.test.ts","tests/m08-runtime-provenance.test.ts",
   "tests/m08-adversarial.test.ts","tests/m08-operator-server.test.ts","tests/m07-adversarial.test.ts","tests/m06-adversarial.test.ts"
@@ -286,6 +288,7 @@ if((Get-Sha256 $RollbackPath) -ne $RollbackSha){throw "M10_ROLLBACK_HASH_DRIFT"}
 if((Get-Sha256 $PreflightPath) -ne $PreflightSha){throw "M10_PREFLIGHT_HASH_DRIFT"}
 if((Get-Sha256 $LiveQualifierPath) -ne $LiveQualifierSha){throw "M10_LIVE_QUALIFIER_HASH_DRIFT"}
 if((Get-Sha256 $StrictLauncherPath) -ne $StrictLauncherSha){throw "M10_STRICT_LAUNCHER_HASH_DRIFT"}
+if((Get-Sha256 $StrictSupervisorPath) -ne $StrictSupervisorSha){throw "M10_STRICT_SUPERVISOR_HASH_DRIFT"}
 if((Get-Sha256 $OperatorCompose) -ne $OperatorComposeSha){throw "M10_OPERATOR_COMPOSE_DRIFT"}
 if((Get-Sha256 $DedicatedCompose) -ne $DedicatedComposeSha){throw "M10_DEDICATED_COMPOSE_DRIFT"}
 $ManifestPostPath=Join-Path $EvidenceRoot "source-manifest-post-probe.txt"
@@ -301,7 +304,7 @@ $Acl=Get-Content -Raw $AclPath|ConvertFrom-Json
 if(-not ([bool]$Acl.inherited_protected -and [bool]$Acl.current_operator_present -and [bool]$Acl.system_present -and [bool]$Acl.administrators_present -and [bool]$Acl.world_absent -and [bool]$Acl.builtin_users_absent)){throw "M10_ACL_FIXTURE_FAILED"}
 $Task=Get-Content -Raw $TaskPath|ConvertFrom-Json
 if([bool]$Task.task_registered -or [string]$Task.logon_type -ne "Interactive" -or [string]$Task.run_level -ne "Limited"){throw "M10_TASK_FEASIBILITY_FAILED"}
-if(-not ([string]$Task.action_argument).Contains("run-m10-readonly-runtime.mjs")){throw "M10_TASK_LAUNCHER_DRIFT"}
+if(-not [bool]$Task.supervisor_bound -or -not ([string]$Task.action_argument).Contains("run-m10-readonly-supervisor.mjs")){throw "M10_TASK_SUPERVISOR_DRIFT"}
 $Compose=Get-Content -Raw $ComposePath|ConvertFrom-Json
 if(-not ([bool]$Compose.operator_host_port_removed -and [bool]$Compose.dedicated_target_host_runtime -and [bool]$Compose.dedicated_api_key_mount -and [bool]$Compose.dedicated_file_backed_header) -or [bool]$Compose.shared_tunnel_compose_touched){throw "M10_COMPOSE_RENDER_CONTRACT_FAILED"}
 $SecretPatterns=@('(?<![A-Za-z0-9])ghp_[A-Za-z0-9]{20,}','(?<![A-Za-z0-9])github_pat_[A-Za-z0-9_]{20,}','(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{20,}','BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY')
@@ -329,7 +332,7 @@ $Envelope=[ordered]@{
   candidate_head=$Head;candidate_manifest_sha256=$ManifestDigest
   parent_cert_sha256=$ParentCertSha;required_human_decision=$ExactDecision;human_decision_received=$false
   executor_sha256=$ExecutorSha;rollback_sha256=$RollbackSha;preflight_sha256=$PreflightSha
-  live_qualifier_sha256=$LiveQualifierSha;strict_launcher_sha256=$StrictLauncherSha
+  live_qualifier_sha256=$LiveQualifierSha;strict_launcher_sha256=$StrictLauncherSha;strict_supervisor_sha256=$StrictSupervisorSha
   operator_compose_sha256=$OperatorComposeSha;dedicated_compose_sha256=$DedicatedComposeSha
   production_preimage_sha256=$PreimageSha;container_digests=@($ContainerPreEvidence)
   listener_8768=@($Listener8768Pre);listener_8769=@($Listener8769Pre)

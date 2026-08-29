@@ -63,9 +63,9 @@ $dedicated=(& docker.exe inspect $DedicatedTunnel|ConvertFrom-Json)[0]
 if($LASTEXITCODE -ne 0 -or -not ((@($dedicated.Args)-join ' ').Contains("host.docker.internal:8769/mcp"))){throw "M10_LIVE_DEDICATED_ROUTE_DRIFT"}
 $task=Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 if(-not $task){throw "M10_LIVE_TASK_MISSING"}
-$expectedLauncher=Join-Path $DeploymentRoot "scripts\run-m10-readonly-runtime.mjs"
+$expectedSupervisor=Join-Path $DeploymentRoot "scripts\run-m10-readonly-supervisor.mjs"
 $action=@($task.Actions)[0]
-if(-not ([string]$action.Arguments).Contains($expectedLauncher)){throw "M10_LIVE_TASK_IDENTITY_DRIFT"}
+if(-not ([string]$action.Arguments).Contains($expectedSupervisor)){throw "M10_LIVE_TASK_IDENTITY_DRIFT"}
 $secretAclPass=Test-SecretAcl
 if(-not $secretAclPass){throw "M10_LIVE_SECRET_ACL_FAILED"}
 $apiKeyFile=Join-Path $StateRoot "operator-api-key";$configPath=Join-Path $StateRoot "host-config.json"
