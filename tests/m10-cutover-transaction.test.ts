@@ -144,12 +144,44 @@ describe("M10 sealed cutover transaction contract", () => {
       "execution_journal_sha256",
       "Stop-ScheduledTask",
       "Unregister-ScheduledTask",
-      "git worktree remove",
+      "git.exe -C $Root worktree remove",
       "READ_ONLY_EMERGENCY",
       "HAIOS_DESKTOP_CONTROL_PLANE_R1_M10_ROLLED_BACK_TO_CERTIFIED_M09_READ_ONLY_STATE",
     ]) expect(source).toContain(marker);
     expect(source).not.toContain("docker system prune");
     expect(source).not.toContain("docker compose down");
+  });
+
+  it("seals rollback recovery inputs and enforces rollback preservation order", async () => {
+    const rollback = await readFile(rollbackPath, "utf8");
+    const preflight = await readFile(join(process.cwd(), "scripts", "qualify-m10-preflight.ps1"), "utf8");
+    for (const marker of [
+      "dedicated_control_key_file", "dedicated_control_key_file_sha256",
+      "shared_tunnel_sha256", "listener_8768",
+    ]) expect(preflight).toContain(marker);
+    for (const marker of [
+      "M10_ROLLBACK_8769_NOT_FREE", "M10_DEDICATED_CONTROL_KEY_BINDING_MISSING",
+      "M10_DEDICATED_CONTROL_KEY_DRIFT", "M10_DEDICATED_RESTORE_ROUTE_FAILED",
+      "M10_ROLLBACK_SHARED_TUNNEL_DRIFT", "M10_ROLLBACK_8768_DRIFT",
+    ]) expect(rollback).toContain(marker);
+    const stopTask = rollback.indexOf("Stop-ScheduledTask");
+    const portFree = rollback.indexOf("M10_ROLLBACK_8769_NOT_FREE");
+    const restoreOperator = rollback.indexOf("operator-mcp", portFree);
+    const health = rollback.indexOf("OPERATOR_EMERGENCY_HEALTH_FAILED", restoreOperator);
+    const restoreDedicated = rollback.indexOf("operator-dedicated-tunnel-client", health);
+    const dedicatedRoute = rollback.indexOf("M10_DEDICATED_RESTORE_ROUTE_FAILED", restoreDedicated);
+    const shared = rollback.indexOf("M10_ROLLBACK_SHARED_TUNNEL_DRIFT", dedicatedRoute);
+    const secure8768 = rollback.indexOf("M10_ROLLBACK_8768_DRIFT", shared);
+    const terminal = rollback.indexOf("HAIOS_DESKTOP_CONTROL_PLANE_R1_M10_ROLLED_BACK_TO_CERTIFIED_M09_READ_ONLY_STATE", secure8768);
+    for (const index of [stopTask, portFree, restoreOperator, health, restoreDedicated, dedicatedRoute, shared, secure8768, terminal]) expect(index).toBeGreaterThanOrEqual(0);
+    expect(stopTask).toBeLessThan(portFree);
+    expect(portFree).toBeLessThan(restoreOperator);
+    expect(restoreOperator).toBeLessThan(health);
+    expect(health).toBeLessThan(restoreDedicated);
+    expect(restoreDedicated).toBeLessThan(dedicatedRoute);
+    expect(dedicatedRoute).toBeLessThan(shared);
+    expect(shared).toBeLessThan(secure8768);
+    expect(secure8768).toBeLessThan(terminal);
   });
 
   it("does not accept caller-controlled production resource names or paths", async () => {

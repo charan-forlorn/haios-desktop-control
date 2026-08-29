@@ -146,6 +146,14 @@ if($m10Processes.Count -ne 0){throw "M10_PREEXISTING_PROCESS_RESIDUE"}
 $ContainerPre=@{}
 foreach($name in $Containers){$ContainerPre[$name]=Get-ContainerIntegrityDigest $name}
 $ContainerPreEvidence=@($Containers|ForEach-Object{[ordered]@{name=$_;sha256=$ContainerPre[$_]}})
+$DedicatedPreInspect=(& docker.exe inspect "haios-operator-dedicated-tunnel-client" 2>$null | ConvertFrom-Json)[0]
+if(-not $DedicatedPreInspect){throw "M10_DEDICATED_CONTAINER_MISSING"}
+$DedicatedControlMount=@($DedicatedPreInspect.Mounts|Where-Object{$_.Destination -eq "/run/secrets/control-plane-api-key"})[0]
+if(-not $DedicatedControlMount -or -not $DedicatedControlMount.Source){throw "M10_DEDICATED_CONTROL_KEY_BINDING_MISSING"}
+$DedicatedControlKeyFile=[IO.Path]::GetFullPath([string]$DedicatedControlMount.Source)
+if(-not(Test-Path -LiteralPath $DedicatedControlKeyFile -PathType Leaf)){throw "M10_DEDICATED_CONTROL_KEY_BINDING_MISSING"}
+$DedicatedControlKeySha=Get-Sha256 $DedicatedControlKeyFile
+$SharedTunnelSha=[string]$ContainerPre["haios-tunnel-client"]
 $OperatorComposeSha=Get-Sha256 $OperatorCompose
 $DedicatedComposeSha=Get-Sha256 $DedicatedCompose
 $ExecutorSha=Get-Sha256 $ExecutorPath
@@ -335,7 +343,8 @@ $Envelope=[ordered]@{
   live_qualifier_sha256=$LiveQualifierSha;strict_launcher_sha256=$StrictLauncherSha;strict_supervisor_sha256=$StrictSupervisorSha
   operator_compose_sha256=$OperatorComposeSha;dedicated_compose_sha256=$DedicatedComposeSha
   production_preimage_sha256=$PreimageSha;container_digests=@($ContainerPreEvidence)
-  listener_8768=@($Listener8768Pre);listener_8769=@($Listener8769Pre)
+  dedicated_control_key_file=$DedicatedControlKeyFile;dedicated_control_key_file_sha256=$DedicatedControlKeySha
+  shared_tunnel_sha256=$SharedTunnelSha;listener_8768=@($Listener8768Pre);listener_8769=@($Listener8769Pre)
   operator_mode_precondition="READ_ONLY_EMERGENCY";full_test_files=$FullFiles;full_tests=$FullTests
   production_mutation_performed=$false;task_created=$false;secret_created=$false;tunnel_reconfigured=$false
   shared_tunnel_preserved=$true;secure_8768_preserved=$true;rollback_prequalified=$true
