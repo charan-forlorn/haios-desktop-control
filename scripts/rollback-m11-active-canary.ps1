@@ -16,6 +16,7 @@ $M10CertifiedManifest="8582819a33800d9949011f6ac07b07248b163fa19ddd8d3fd1d1e47bd
 $M10RemoteDispatchProof="C:\Workspace\haios-desktop-control-m10\evidence\m10\final\remote-dispatch-proof.json"
 $M10RouteDivergenceProof="C:\Workspace\haios-desktop-control-m10\evidence\m10\final\route-divergence-proof.json"
 $CanaryRoot="C:\Workspace\haios-operator-canary"
+$ExpectedCanaryBranch="main"
 $DeploymentRoot="C:\Workspace\haios-desktop-control-m11-runtime"
 $StateRoot=Join-Path $env:LOCALAPPDATA "HAIOS\M11"
 $M10ApiKeyFile=[IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA "HAIOS\M10\operator-api-key"))
@@ -55,6 +56,7 @@ if([IO.Path]::GetFullPath([string]$Envelope.remote_dispatch_proof_path) -ne $M10
 # remote_dispatch_proof_sha256 and route_divergence_proof_sha256 remain sealed in the activation envelope.
 if([string]::IsNullOrWhiteSpace([string]$Envelope.remote_dispatch_proof_sha256) -or [string]::IsNullOrWhiteSpace([string]$Envelope.route_divergence_proof_sha256)){Block "M10_FINAL_PROOF_IDENTITY_MISSING"}
 if([string]$Envelope.canary_root -ne $CanaryRoot){Block "CANARY_ROOT_MISMATCH"}
+if([string]$Envelope.canary_branch -ne $ExpectedCanaryBranch){Block "CANARY_BRANCH_MISMATCH"}
 if([string]$Envelope.m10_task_name -ne $M10Task -or [string]$Envelope.m11_task_name -ne $M11Task){Block "TASK_IDENTITY_MISMATCH"}
 if(-not(Test-Path -LiteralPath $M10ApiKeyFile)){Block "M10_API_KEY_MISSING"}
 if((Get-Sha256 $M10ApiKeyFile) -ne [string]$Envelope.m10_api_key_sha256){Block "M10_API_KEY_DRIFT"}
@@ -90,9 +92,12 @@ do{
 if(-not $restored){Block "M10_READ_ONLY_EMERGENCY_RESTORE_FAILED"}
 $ExpectedRestoredMode="READ_ONLY_EMERGENCY"
 
+$canaryBranch=(& git.exe -C $CanaryRoot branch --show-current).Trim()
+if($LASTEXITCODE -ne 0){Block "M11_ROLLBACK_CANARY_PREIMAGE_DRIFT"}
 $canaryHead=(& git.exe -C $CanaryRoot rev-parse HEAD).Trim()
+if($LASTEXITCODE -ne 0){Block "M11_ROLLBACK_CANARY_PREIMAGE_DRIFT"}
 $canaryStatus=(& git.exe -C $CanaryRoot status --porcelain)
-if($LASTEXITCODE -ne 0 -or $canaryHead -ne [string]$Envelope.canary_head -or $canaryStatus.Length -ne 0){Block "M11_ROLLBACK_CANARY_PREIMAGE_DRIFT"}
+if($LASTEXITCODE -ne 0 -or $canaryBranch -ne $ExpectedCanaryBranch -or $canaryBranch -ne [string]$Envelope.canary_branch -or $canaryHead -ne [string]$Envelope.canary_head -or $canaryStatus.Length -ne 0){Block "M11_ROLLBACK_CANARY_PREIMAGE_DRIFT"}
 
 # Non-critical cleanup occurs only after M10 recovery is proven.
 $m11TaskObject=Get-ScheduledTask -TaskName $M11Task -ErrorAction SilentlyContinue

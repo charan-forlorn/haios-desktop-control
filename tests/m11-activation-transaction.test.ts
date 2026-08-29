@@ -197,4 +197,18 @@ describe("M11 independent-review remediation contracts", () => {
     expect(rollback).toContain("git.exe -C $CanaryRoot rev-parse HEAD");
     expect(rollback).toContain("git.exe -C $CanaryRoot status --porcelain");
   });
+  it("binds the exact main canary branch through preflight, execution, and rollback", async () => {
+    const [preflight, execute, rollback] = await sources();
+    expect(preflight).toContain('$ExpectedCanaryBranch="main"');
+    expect(preflight).toContain("git.exe -C $CanaryRoot branch --show-current");
+    expect(preflight).toContain("M11_CANARY_BRANCH_DENIED");
+    expect(preflight).toContain("canary_branch=$canaryBranch");
+    for (const source of [execute, rollback]) {
+      expect(source).toContain('$ExpectedCanaryBranch="main"');
+      expect(source).toContain("git.exe -C $CanaryRoot branch --show-current");
+      expect(source).toContain("Envelope.canary_branch");
+    }
+    expect(execute).toContain("CANARY_BRANCH_DRIFT");
+    expect(rollback).toContain("M11_ROLLBACK_CANARY_PREIMAGE_DRIFT");
+  });
 });

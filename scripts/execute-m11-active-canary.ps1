@@ -18,6 +18,7 @@ $M10CertifiedManifest="8582819a33800d9949011f6ac07b07248b163fa19ddd8d3fd1d1e47bd
 $M10RemoteDispatchProof="C:\Workspace\haios-desktop-control-m10\evidence\m10\final\remote-dispatch-proof.json"
 $M10RouteDivergenceProof="C:\Workspace\haios-desktop-control-m10\evidence\m10\final\route-divergence-proof.json"
 $CanaryRoot="C:\Workspace\haios-operator-canary"
+$ExpectedCanaryBranch="main"
 $DeploymentRoot="C:\Workspace\haios-desktop-control-m11-runtime"
 $StateRoot=Join-Path $env:LOCALAPPDATA "HAIOS\M11"
 $M10ApiKeyFile=[IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA "HAIOS\M10\operator-api-key"))
@@ -61,6 +62,7 @@ if([string]$Envelope.required_human_decision -ne $ExactDecision){AuthorityFail "
 if($HumanDecision -ne $ExactDecision){AuthorityFail "HUMAN_DECISION_MISMATCH"}
 if([string]$Envelope.m10_final_terminal -ne $M10FinalTerminal){AuthorityFail "M10_FINAL_TERMINAL_MISMATCH"}
 if([string]$Envelope.canary_root -ne $CanaryRoot){AuthorityFail "CANARY_ROOT_MISMATCH"}
+if([string]$Envelope.canary_branch -ne $ExpectedCanaryBranch){AuthorityFail "CANARY_BRANCH_MISMATCH"}
 if([string]$Envelope.m10_task_name -ne $M10Task -or [string]$Envelope.m11_task_name -ne $M11Task){AuthorityFail "TASK_IDENTITY_MISMATCH"}
 if([bool]$Envelope.tunnel_mutation_authorized -or [bool]$Envelope.m10_api_key_rotation_authorized){AuthorityFail "FORBIDDEN_AUTHORITY_PRESENT"}
 
@@ -88,6 +90,8 @@ if($LASTEXITCODE -ne 0 -or $candidateHead -ne [string]$Envelope.candidate_head){
 if((& git.exe -C $Root status --porcelain).Length -ne 0){AuthorityFail "CANDIDATE_WORKTREE_DIRTY"}
 if((Get-ManifestDigest $Root) -ne [string]$Envelope.candidate_manifest_sha256){AuthorityFail "CANDIDATE_MANIFEST_DRIFT"}
 if(-not(Test-Path -LiteralPath $CanaryRoot)){AuthorityFail "CANARY_ROOT_MISSING"}
+$canaryBranch=(& git.exe -C $CanaryRoot branch --show-current).Trim()
+if($LASTEXITCODE -ne 0 -or $canaryBranch -ne $ExpectedCanaryBranch -or $canaryBranch -ne [string]$Envelope.canary_branch){AuthorityFail "CANARY_BRANCH_DRIFT"}
 $canaryHead=(& git.exe -C $CanaryRoot rev-parse HEAD).Trim()
 if($LASTEXITCODE -ne 0 -or $canaryHead -ne [string]$Envelope.canary_head){AuthorityFail "CANARY_HEAD_DRIFT"}
 if((& git.exe -C $CanaryRoot status --porcelain).Length -ne 0){AuthorityFail "CANARY_WORKTREE_DIRTY"}
@@ -120,7 +124,7 @@ if(-not((@($dedicated.Args)-join ' ').Contains($ExpectedTunnelRoute))){Authority
 Write-Journal "M11_HUMAN_AUTHORITY_ACCEPTED" @{decision_matched=$true}
 Write-Journal "M11_M10_FINAL_CERT_CURRENT" @{sha256=[string]$Envelope.m10_final_cert_sha256}
 Write-Journal "M11_CANDIDATE_CURRENT" @{candidate_manifest_sha256=[string]$Envelope.candidate_manifest_sha256}
-Write-Journal "M11_CANARY_PREIMAGE_CURRENT" @{canary_head=$canaryHead}
+Write-Journal "M11_CANARY_PREIMAGE_CURRENT" @{canary_branch=$canaryBranch;canary_head=$canaryHead}
 Write-Journal "M11_M10_API_KEY_CURRENT" @{m10_api_key_sha256=[string]$Envelope.m10_api_key_sha256}
 Write-Journal "M11_M10_RUNTIME_PREIMAGE_CURRENT"
 Write-Journal "M11_TUNNEL_PREIMAGE_CURRENT" @{route=$ExpectedTunnelRoute;listener_8768=$listener8768}
@@ -210,6 +214,7 @@ try{
     mode="ACTIVE"
     activation_scope="M11_CANARY_ONLY"
     canary_root=$CanaryRoot
+    canary_branch=$canaryBranch
     canary_head_preimage=[string]$Envelope.canary_head
     m10_api_key_rotated=$false
     tunnel_route_changed=$false

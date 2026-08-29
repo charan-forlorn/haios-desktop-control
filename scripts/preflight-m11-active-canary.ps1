@@ -15,6 +15,7 @@ $M10CertifiedManifest = "8582819a33800d9949011f6ac07b07248b163fa19ddd8d3fd1d1e47
 $M10RemoteDispatchProof = "C:\Workspace\haios-desktop-control-m10\evidence\m10\final\remote-dispatch-proof.json"
 $M10RouteDivergenceProof = "C:\Workspace\haios-desktop-control-m10\evidence\m10\final\route-divergence-proof.json"
 $CanaryRoot = "C:\Workspace\haios-operator-canary"
+$ExpectedCanaryBranch="main"
 $M10Task = "HAIOS-M10-Operator-ReadOnly"
 $M11Task = "HAIOS-M11-Operator-Active-Canary"
 $M10RuntimeRoot = "C:\Workspace\haios-desktop-control-runtime"
@@ -67,6 +68,8 @@ $candidateHead=(& git.exe -C $Root rev-parse HEAD).Trim()
 if($LASTEXITCODE -ne 0){throw "M11_CANDIDATE_HEAD_READ_FAILED"}
 if((& git.exe -C $Root status --porcelain).Length -ne 0){throw "M11_CANDIDATE_WORKTREE_DIRTY"}
 $candidateManifest=Get-ManifestDigest $Root
+$canaryBranch=(& git.exe -C $CanaryRoot branch --show-current).Trim()
+if($LASTEXITCODE -ne 0 -or $canaryBranch -ne $ExpectedCanaryBranch){throw "M11_CANARY_BRANCH_DENIED"}
 $canaryHead=(& git.exe -C $CanaryRoot rev-parse HEAD).Trim()
 if($LASTEXITCODE -ne 0){throw "M11_CANARY_HEAD_READ_FAILED"}
 if((& git.exe -C $CanaryRoot status --porcelain).Length -ne 0){throw "M11_CANARY_WORKTREE_DIRTY"}
@@ -119,6 +122,7 @@ $envelope=[ordered]@{
   supervisor_sha256=Get-Sha256 $supervisor
   probe_sha256=Get-Sha256 $probe
   canary_root=$CanaryRoot
+  canary_branch=$canaryBranch
   canary_head=$canaryHead
   m10_api_key_sha256=Get-Sha256 $M10ApiKeyFile
   m10_task_name=$M10Task
