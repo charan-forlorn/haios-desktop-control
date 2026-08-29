@@ -48,6 +48,7 @@ const INPUT_FIELDS = new Set([
   "timedOut",
   "effectSummary",
 ]);
+const REQUIRED_INPUT_FIELDS = new Set(["reason", "taskId", "effectClass", "currentness"]);
 const EFFECT_SUMMARY_FIELDS = new Set([
   "total",
   "allowedArtifact",
@@ -78,9 +79,24 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return prototype === Object.prototype || prototype === null;
 }
 
-function assertExactFields(value: Record<string, unknown>, allowed: ReadonlySet<string>, error: string): void {
+function readOwnDataFields(
+  value: Record<string, unknown>,
+  allowed: ReadonlySet<string>,
+  required: ReadonlySet<string>,
+  fieldsError: string,
+  inputError: string,
+): ReadonlyMap<string, unknown> {
   const keys = Reflect.ownKeys(value);
-  if (keys.some((key) => typeof key !== "string" || !allowed.has(key))) deny(error);
+  if (keys.some((key) => typeof key !== "string" || !allowed.has(key))) deny(fieldsError);
+  const fields = new Map<string, unknown>();
+  for (const key of keys) {
+    if (typeof key !== "string") return deny(fieldsError);
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (descriptor === undefined || !("value" in descriptor)) return deny(inputError);
+    fields.set(key, descriptor.value);
+  }
+  for (const key of required) if (!fields.has(key)) return deny(inputError);
+  return fields;
 }
 
 function code(value: unknown, field: string): string {
@@ -119,14 +135,21 @@ function effectCount(value: unknown): number {
 function normalizeEffectSummary(value: unknown): FailureEffectSummary {
   if (value === undefined) return EMPTY_EFFECT_SUMMARY;
   if (!isRecord(value)) return deny("FAILURE_FINGERPRINT_EFFECT_SUMMARY_DENIED");
-  assertExactFields(value, EFFECT_SUMMARY_FIELDS, "FAILURE_FINGERPRINT_EFFECT_SUMMARY_DENIED");
-  if (typeof value.complete !== "boolean") return deny("FAILURE_FINGERPRINT_EFFECT_SUMMARY_DENIED");
+  const fields = readOwnDataFields(
+    value,
+    EFFECT_SUMMARY_FIELDS,
+    EFFECT_SUMMARY_FIELDS,
+    "FAILURE_FINGERPRINT_EFFECT_SUMMARY_DENIED",
+    "FAILURE_FINGERPRINT_EFFECT_SUMMARY_DENIED",
+  );
+  const complete = fields.get("complete");
+  if (typeof complete !== "boolean") return deny("FAILURE_FINGERPRINT_EFFECT_SUMMARY_DENIED");
   return Object.freeze({
-    total: effectCount(value.total),
-    allowedArtifact: effectCount(value.allowedArtifact),
-    unclassified: effectCount(value.unclassified),
-    protected: effectCount(value.protected),
-    complete: value.complete,
+    total: effectCount(fields.get("total")),
+    allowedArtifact: effectCount(fields.get("allowedArtifact")),
+    unclassified: effectCount(fields.get("unclassified")),
+    protected: effectCount(fields.get("protected")),
+    complete,
   });
 }
 
@@ -141,23 +164,30 @@ function sha256(value: JsonValue): string {
 
 export function normalizeFailureFingerprintInput(input: unknown): NormalizedFailureFingerprintInput {
   if (!isRecord(input)) return deny("FAILURE_FINGERPRINT_INPUT_DENIED");
-  assertExactFields(input, INPUT_FIELDS, "FAILURE_FINGERPRINT_FIELDS_DENIED");
-  const effectClass = code(input.effectClass, "EFFECT_CLASS") as FailureEffectClass;
-  const currentness = code(input.currentness, "CURRENTNESS") as FailureCurrentness;
-  const sandboxClass = input.sandboxClass === undefined ? "UNKNOWN" : code(input.sandboxClass, "SANDBOX_CLASS") as FailureSandboxClass;
+  const fields = readOwnDataFields(
+    input,
+    INPUT_FIELDS,
+    REQUIRED_INPUT_FIELDS,
+    "FAILURE_FINGERPRINT_FIELDS_DENIED",
+    "FAILURE_FINGERPRINT_INPUT_DENIED",
+  );
+  const effectClass = code(fields.get("effectClass"), "EFFECT_CLASS") as FailureEffectClass;
+  const currentness = code(fields.get("currentness"), "CURRENTNESS") as FailureCurrentness;
+  const sandboxClassValue = fields.get("sandboxClass");
+  const sandboxClass = sandboxClassValue === undefined ? "UNKNOWN" : code(sandboxClassValue, "SANDBOX_CLASS") as FailureSandboxClass;
   if (!EFFECT_CLASSES.has(effectClass)) return deny("FAILURE_FINGERPRINT_EFFECT_CLASS_DENIED");
   if (!CURRENTNESS_VALUES.has(currentness)) return deny("FAILURE_FINGERPRINT_CURRENTNESS_DENIED");
   if (!SANDBOX_CLASSES.has(sandboxClass)) return deny("FAILURE_FINGERPRINT_SANDBOX_CLASS_DENIED");
   return Object.freeze({
-    reason: code(input.reason, "REASON"),
-    taskId: code(input.taskId, "TASK_ID"),
+    reason: code(fields.get("reason"), "REASON"),
+    taskId: code(fields.get("taskId"), "TASK_ID"),
     effectClass,
     currentness,
     sandboxClass,
-    exitCode: optionalExitCode(input.exitCode),
-    sandboxReason: optionalCode(input.sandboxReason, "SANDBOX_REASON"),
-    timedOut: optionalBoolean(input.timedOut, "TIMED_OUT"),
-    effectSummary: normalizeEffectSummary(input.effectSummary),
+    exitCode: optionalExitCode(fields.get("exitCode")),
+    sandboxReason: optionalCode(fields.get("sandboxReason"), "SANDBOX_REASON"),
+    timedOut: optionalBoolean(fields.get("timedOut"), "TIMED_OUT"),
+    effectSummary: normalizeEffectSummary(fields.get("effectSummary")),
   });
 }
 
