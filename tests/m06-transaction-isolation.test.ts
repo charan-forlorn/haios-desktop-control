@@ -135,4 +135,14 @@ describe("M06 transaction-owned isolation", () => {
       decision: "DENY", reason: "INVALID_TRANSACTION_STATE",
     });
   });
+  it("preserves legacy rollback cleanup semantics when no recovery coordinator is configured", async () => {
+    const { canonical, git, service } = await fixture();
+    const begun = await service.begin("demo", canonical);
+    if (begun.decision !== "ALLOW") throw new Error("begin denied");
+    git.canonicalHead = "c".repeat(40);
+    await expect(service.rollback(begun.transaction.txId)).resolves.toMatchObject({
+      decision: "ALLOW", state: "ROLLED_BACK",
+    });
+  });
+
 });

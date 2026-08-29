@@ -3,7 +3,7 @@ import { SandboxExecutor } from "./sandbox-executor.js";
 import { loadTaskRegistryV2 } from "./task-contract-v2.js";
 import { loadTaskEffectPolicy } from "./task-effects.js";
 import { OperatorTaskRunner } from "./task-runner.js";
-import { OperatorTransactionService } from "./transaction-isolation.js";
+import { OperatorTransactionService, type OperatorTransactionRecoveryCoordinator } from "./transaction-isolation.js";
 import {
   createOperatorControlRuntime,
   type OperatorControlRuntime,
@@ -24,6 +24,7 @@ export interface QualifiedOperatorControlRuntimeConfig {
   readonly allowedProjects: Readonly<Record<string, string>>;
   readonly registryPath: string;
   readonly effectPolicyPath: string;
+  readonly recovery?: OperatorTransactionRecoveryCoordinator;
 }
 export interface QualifiedOperatorControlRuntime extends OperatorControlRuntime {
   readonly attestation: typeof M08_QUALIFIED_RUNTIME_IDENTITY;
@@ -71,6 +72,7 @@ export async function createQualifiedOperatorControlRuntime(
     worktreeRoot: config.worktreeRoot,
     allowedProjects: Object.freeze({ ...config.allowedProjects }),
     git,
+    ...(config.recovery === undefined ? {} : { recovery: config.recovery }),
   });
   const sandbox = new SandboxExecutor();
   const tasks = new OperatorTaskRunner({
