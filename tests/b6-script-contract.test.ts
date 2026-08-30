@@ -76,7 +76,9 @@ describe("B6 staged activation helper boundaries", () => {
     for (const marker of ["prepare-b6-runtime-build.mjs", "pathToFileURL", "candidateManifestSha256", "compiledOutputSha256"]) expect(launcher).toContain(marker);
     for (const marker of ["--outDir", "mkdtemp", "runtime", "task-registry.m07.json", "task-effects.m07.json", "candidateManifestSha256", "compiledOutputSha256", "B6_RUNTIME_SOURCE_CHANGED_DURING_BUILD"]) expect(prepare).toContain(marker);
   });
-  it("final sealing accepts only canonical stage artifacts and revalidates their live evidence bytes", async () => {
+  it("stage and final sealing validate canonical artifacts against current repository facts before issuing seals", async () => {
+    const stageSeal = await readFile(join(process.cwd(), "scripts", "seal-b6-stage.mjs"), "utf8");
+    for (const marker of ["preflight-b6-project-expansion.ps1", "-ValidateOnly", "B6_STAGE_PREFLIGHT_NOT_CURRENT"]) expect(stageSeal).toContain(marker);
     const finalSeal = await readFile(join(process.cwd(), "scripts", "seal-b6-final.mjs"), "utf8");
     for (const marker of ["stage1-final-certification.json", "stage2-final-certification.json", "stage1-live-qualification.json", "stage2-live-qualification.json",
       "liveQualificationEvidenceSha256", "effectPolicyVerified", "rollbackRecoveryClassification", "hermesOsDenied", "skillFabricRegression", "operatorCanaryRegression", "wrongRootDenied", "unknownProjectDenied", "B6_FINAL_ARTIFACT_PATH_DENIED"]) expect(finalSeal).toContain(marker);

@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
-import { basename, dirname, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const stage = process.argv[2];
 const certificationPath = resolve(process.argv[3] ?? "");
@@ -31,6 +33,13 @@ const certBytes = await readFile(certificationPath);
 const evidenceBytes = await readFile(evidencePath);
 const cert = JSON.parse(certBytes.toString("utf8"));
 const evidence = JSON.parse(evidenceBytes.toString("utf8"));
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const preflightPath = join(repoRoot, "scripts", "preflight-b6-project-expansion.ps1");
+const preflightArgs = ["-NoProfile", "-File", preflightPath, "-Stage", stage, "-CandidateManifestSha256", cert.b6CandidateManifestSha256,
+  "-EvidencePath", evidencePath, "-CertificationPath", certificationPath, "-ValidateOnly"];
+if (stage === "HERMES_OS") preflightArgs.push("-StageOneCertificationPath", resolve(localAppData, "HAIOS", "B6", "evidence", "stage1", "stage1-final-certification.json"));
+try { execFileSync("pwsh", preflightArgs, { cwd: repoRoot, stdio: "pipe", windowsHide: true }); }
+catch { throw new Error("B6_STAGE_PREFLIGHT_NOT_CURRENT"); }
 const certDigest = cert.certificationSha256;
 const { certificationSha256, ...unsigned } = cert;
 if (!/^[a-f0-9]{64}$/u.test(certDigest ?? "") || certDigest !== sha(Buffer.from(stableJson(unsigned), "utf8"))) throw new Error("B6_STAGE_CERTIFICATION_HASH_INVALID");
