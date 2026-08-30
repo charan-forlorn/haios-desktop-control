@@ -445,6 +445,32 @@ export class RemediationStore {
     });
   }
 
+  async hasPendingReplan(requestedEpisodeId: string): Promise<boolean> {
+    return this.#withRead(async () => {
+      const paths = await this.#paths(requestedEpisodeId);
+      await this.#assertNoResidue(paths.pin);
+      const tombstone = await this.#readTombstone(paths.tombstonePath, paths.pin, requestedEpisodeId, true);
+      const stored = await this.#readRecord(paths.recordPath, paths.pin, requestedEpisodeId, true);
+      const lineage = await this.#readTransitionLineage(paths.transitionLineagePath, paths.pin, requestedEpisodeId, true);
+      if (tombstone !== undefined && (stored === undefined || tombstone.tombstone.recordHash !== stored.record.hash)) {
+        deny(M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
+      }
+      if (lineage !== undefined && (stored === undefined || tombstone !== undefined)) {
+        deny(M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
+      }
+      if (stored !== undefined && isAttemptTwoUnreplanned(stored.record)) {
+        if (lineage === undefined) deny(M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
+        assertTransitionLineageMatchesRecord(lineage.lineage, stored.record, M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
+      } else if (lineage !== undefined) {
+        deny(M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED);
+      }
+      await this.#assertDirectory(paths.pin);
+      await this.#assertNoResidue(paths.pin);
+      if (tombstone !== undefined || stored === undefined || !isAttemptTwoUnreplanned(stored.record)) return false;
+      return lineage?.lineage.directive === "REPLAN_REQUIRED";
+    });
+  }
+
   async save(input: RemediationEpisodeSnapshot | RemediationEpisodeRecord): Promise<RemediationEpisodeRecord> {
     const snapshot = normalizeSnapshot(input, M12_REMEDIATION_STATE_DENIED);
     const record = verifiedRecord(snapshot);

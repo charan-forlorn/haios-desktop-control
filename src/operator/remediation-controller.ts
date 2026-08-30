@@ -255,6 +255,10 @@ export class RemediationController {
     });
   }
 
+  async hasPendingReplan(episodeIdInput: string): Promise<boolean> {
+    return this.#serialized(async () => this.#store.hasPendingReplan(episodeId(episodeIdInput)));
+  }
+
   async acceptCleanStateReplan(episodeIdInput: string, preconditionsInput: CleanStateReplanPreconditions): Promise<RemediationEpisodeRecord> {
     return this.#serialized(async () => {
       const id = episodeId(episodeIdInput);

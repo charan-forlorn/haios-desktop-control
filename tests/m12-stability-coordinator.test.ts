@@ -117,6 +117,35 @@ describe("M12 stability coordinator", () => {
     expect(result.stability).not.toHaveProperty("worktreePath");
   });
 
+  it("admits exactly one server-owned clean-state replan before the next live task attempt", async () => {
+    const { coordinator } = await fixture();
+    let calls = 0;
+    const base: OperatorControlTaskApi = Object.freeze({
+      run: async () => { calls += 1; return calls < 3 ? denied() : allowed(); },
+    });
+    const api = createM12StabilityTaskApi(base, coordinator);
+
+    await expect(api.run(request)).resolves.toMatchObject({ stability: { directive: "RETRY_SAME_PLAN", replanUsed: false } });
+    await expect(api.run(request)).resolves.toMatchObject({ stability: { directive: "REPLAN_REQUIRED", replanUsed: false } });
+    await expect(api.run(request)).resolves.toMatchObject({ stability: { directive: "PASS", replanUsed: true } });
+    expect(calls).toBe(3);
+    expect(Object.keys(api)).toEqual(["run"]);
+  });
+
+  it("fails closed on a durable pending replan after coordinator restart without live cleanup proof", async () => {
+    const stateRoot = await mkdtemp(`${tmpdir()}\\m12-stability-restart-`); roots.push(stateRoot);
+    const facts = new Facts(); const recovery = new Recovery();
+    const first = new M12StabilityCoordinator({ remediation: new RemediationController(new RemediationStore(stateRoot)), facts, recovery });
+    const failing: OperatorControlTaskApi = Object.freeze({ run: async () => denied() });
+    const firstApi = createM12StabilityTaskApi(failing, first);
+    await firstApi.run(request);
+    await expect(firstApi.run(request)).resolves.toMatchObject({ stability: { directive: "REPLAN_REQUIRED" } });
+
+    const restarted = new M12StabilityCoordinator({ remediation: new RemediationController(new RemediationStore(stateRoot)), facts, recovery });
+    const restartedApi = createM12StabilityTaskApi(Object.freeze({ run: async () => allowed() }), restarted);
+    await expect(restartedApi.run(request)).rejects.toThrow("M12_STABILITY_COORDINATOR_DENIED");
+  });
+
   it("returns only transaction id plus classification during startup recovery", async () => {
     const { coordinator, recovery } = await fixture();
     recovery.residue = [{ txId: request.txId, classification: "SAFE_TO_ROLLBACK" }];

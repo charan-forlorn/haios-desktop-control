@@ -73,6 +73,7 @@ export class M12StabilityCoordinator {
   readonly #remediation: RemediationController;
   readonly #facts: M12StabilityFactsProvider;
   readonly #recovery: OperatorTransactionRecoveryCoordinator | undefined;
+  readonly #pendingReplanProofs = new Map<string, Readonly<{ txId: string; taskId: string }>>();
 
   constructor(config: M12StabilityCoordinatorConfig) {
     const keys = Reflect.ownKeys(config);
@@ -83,6 +84,30 @@ export class M12StabilityCoordinator {
     this.#remediation = config.remediation;
     this.#facts = config.facts;
     this.#recovery = config.recovery;
+  }
+
+  async prepareTaskRun(request: OperatorTaskRunRequest, activeMutableCodeProcess: boolean): Promise<boolean> {
+    validateRequest(request);
+    if (typeof activeMutableCodeProcess !== "boolean") return deny();
+    const id = episodeId(request);
+    if (!(await this.#remediation.hasPendingReplan(id))) return false;
+    const proof = this.#pendingReplanProofs.get(id);
+    if (proof === undefined || proof.txId !== request.txId || proof.taskId !== request.taskId) return deny();
+    const facts = await this.#facts.inspect(request.txId);
+    if (facts === undefined || facts.projectId !== "operator-canary" || facts.authority !== "AUTHORIZED"
+      || facts.currentness !== "CURRENT" || facts.emergency !== "NONE"
+      || facts.recovery.transactionId !== request.txId || facts.recovery.repositoryIdentity !== facts.repositoryIdentity
+      || facts.recovery.projectId !== facts.projectId) return deny();
+    const recovery = classifyRecovery(facts.recovery);
+    const unresolvedTaskEffects = facts.recovery.unresolvedEffects;
+    const ownership = facts.recovery.ownership === "EXACT" ? "UNAMBIGUOUS" as const : "AMBIGUOUS" as const;
+    if (activeMutableCodeProcess || unresolvedTaskEffects || ownership !== "UNAMBIGUOUS" || recovery !== "SAFE_TO_CONTINUE") return deny();
+    const accepted = await this.#remediation.acceptCleanStateReplan(id, {
+      activeMutableCodeProcess, unresolvedTaskEffects, ownership, recovery,
+    });
+    if (!accepted.replanUsed) return deny();
+    this.#pendingReplanProofs.delete(id);
+    return true;
   }
 
   async observeTaskResult(request: OperatorTaskRunRequest, result: OperatorTaskRunResult): Promise<M12StabilityResult> {
@@ -104,8 +129,9 @@ export class M12StabilityCoordinator {
       timedOut: result.metadata.timedOut,
       effectSummary: result.metadata.effectSummary,
     });
+    const id = episodeId(request);
     const decision = await this.#remediation.record({
-      episodeId: episodeId(request),
+      episodeId: id,
       projectId: "operator-canary",
       repositoryIdentity: facts.repositoryIdentity,
       transactionId: request.txId,
@@ -118,6 +144,13 @@ export class M12StabilityCoordinator {
       emergency: facts.emergency,
       recovery,
     });
+    if (decision.directive === "REPLAN_REQUIRED" && result.metadata.cleanupVerified === true
+      && result.metadata.cleanupStatus === "VERIFIED" && recovery === "SAFE_TO_CONTINUE"
+      && facts.authority === "AUTHORIZED" && facts.currentness === "CURRENT" && facts.emergency === "NONE") {
+      this.#pendingReplanProofs.set(id, Object.freeze({ txId: request.txId, taskId: request.taskId }));
+    } else if (decision.directive !== "REPLAN_REQUIRED") {
+      this.#pendingReplanProofs.delete(id);
+    }
     return Object.freeze({
       ...decision,
       coarseFingerprint: fingerprint.coarse,
@@ -150,11 +183,19 @@ export function createM12StabilityTaskApi(
   coordinator: M12StabilityCoordinator,
 ): M12StabilityTaskApi {
   if (!(coordinator instanceof M12StabilityCoordinator)) throw new Error(M12_STABILITY_COORDINATOR_DENIED);
+  let activeRuns = 0;
   return Object.freeze({
     run: async (request: OperatorTaskRunRequest) => {
-      const result = await baseTasks.run(request) as OperatorTaskRunResult;
-      const stability = await coordinator.observeTaskResult(request, result);
-      return Object.freeze({ ...result, stability });
+      const activeMutableCodeProcess = activeRuns !== 0;
+      activeRuns += 1;
+      try {
+        await coordinator.prepareTaskRun(request, activeMutableCodeProcess);
+        const result = await baseTasks.run(request) as OperatorTaskRunResult;
+        const stability = await coordinator.observeTaskResult(request, result);
+        return Object.freeze({ ...result, stability });
+      } finally {
+        activeRuns -= 1;
+      }
     },
   });
 }
