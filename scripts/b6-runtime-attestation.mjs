@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
-import { readFile, readdir } from "node:fs/promises";
+import { readFile, readdir, rm } from "node:fs/promises";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
@@ -38,6 +38,24 @@ async function compiledDigest(buildRoot) {
   for (const path of files) rows.push(`${sha256(await readFile(path))}  ${relative(buildRoot, path).split(sep).join("/")}`);
   return Object.freeze({ compiledFileCount: files.length, compiledOutputSha256: sha256(Buffer.from(`${rows.join("\n")}\n`, "utf8")) });
 }
+async function independentlyRebuildCurrentRuntime(current) {
+  const prepared = await run(process.execPath, [join(repoRoot, "scripts", "prepare-b6-runtime-build.mjs")],
+    { cwd: repoRoot, encoding: "utf8", windowsHide: true, maxBuffer: 16 * 1024 * 1024 });
+  const verifier = JSON.parse(prepared.stdout.trim().split(/\r?\n/u).at(-1));
+  if (verifier?.schema !== "HAIOS_B6_RUNTIME_BUILD_R1" || verifier.candidateHeadSha !== current.candidateHeadSha
+    || verifier.candidateTrackedCount !== current.candidateTrackedCount || verifier.candidateManifestSha256 !== current.candidateManifestSha256
+    || !Number.isSafeInteger(verifier.compiledFileCount) || !/^[a-f0-9]{64}$/u.test(verifier.compiledOutputSha256 ?? "")) {
+    throw new Error("B6_RUNTIME_BUILD_REPRODUCTION_FAILED");
+  }
+  const verifierBuildRoot = resolve(verifier.buildRoot);
+  const verifierRel = relative(runtimeRoot, verifierBuildRoot);
+  if (verifierRel === "" || verifierRel === ".." || verifierRel.startsWith(`..${sep}`)) throw new Error("B6_RUNTIME_BUILD_REPRODUCTION_FAILED");
+  const reproduced = await compiledDigest(verifierBuildRoot);
+  if (reproduced.compiledFileCount !== verifier.compiledFileCount || reproduced.compiledOutputSha256 !== verifier.compiledOutputSha256) {
+    throw new Error("B6_RUNTIME_BUILD_REPRODUCTION_FAILED");
+  }
+  return Object.freeze({ ...verifier, buildRoot: verifierBuildRoot });
+}
 export async function loadCurrentB6RuntimeBinding(expectedStage) {
   if (expectedStage !== "SKILL_FABRIC" && expectedStage !== "HERMES_OS") throw new Error("B6_RUNTIME_BINDING_STAGE_REQUIRED");
   const localAppData = process.env.LOCALAPPDATA;
@@ -66,9 +84,18 @@ export async function loadCurrentB6RuntimeBinding(expectedStage) {
   if (compiled.compiledFileCount !== attestation.compiledFileCount || compiled.compiledOutputSha256 !== attestation.compiledOutputSha256) {
     throw new Error("B6_RUNTIME_COMPILED_OUTPUT_DRIFT");
   }
-  try { process.kill(attestation.pid, 0); } catch { throw new Error("B6_RUNTIME_PROCESS_NOT_CURRENT"); }
-  const hostConfig = await import(pathToFileURL(join(buildRoot, "src", "operator", "host-runtime-config.js")).href);
-  const protocol = await import(pathToFileURL(join(buildRoot, "src", "operator", "protocol.js")).href);
-  return Object.freeze({ attestation: Object.freeze(attestation), current, loadHostApiKey: hostConfig.loadHostApiKey,
-    OPERATOR_V1_TOOL_NAMES: protocol.OPERATOR_V1_TOOL_NAMES });
+  let verifier;
+  try {
+    verifier = await independentlyRebuildCurrentRuntime(current);
+    if (verifier.compiledFileCount !== attestation.compiledFileCount || verifier.compiledOutputSha256 !== attestation.compiledOutputSha256) {
+      throw new Error("B6_RUNTIME_BUILD_REPRODUCTION_FAILED");
+    }
+    try { process.kill(attestation.pid, 0); } catch { throw new Error("B6_RUNTIME_PROCESS_NOT_CURRENT"); }
+    const hostConfig = await import(pathToFileURL(join(verifier.buildRoot, "src", "operator", "host-runtime-config.js")).href);
+    const protocol = await import(pathToFileURL(join(verifier.buildRoot, "src", "operator", "protocol.js")).href);
+    return Object.freeze({ attestation: Object.freeze(attestation), current, loadHostApiKey: hostConfig.loadHostApiKey,
+      OPERATOR_V1_TOOL_NAMES: protocol.OPERATOR_V1_TOOL_NAMES });
+  } finally {
+    if (verifier?.buildRoot) await rm(verifier.buildRoot, { recursive: true, force: true }).catch(() => undefined);
+  }
 }

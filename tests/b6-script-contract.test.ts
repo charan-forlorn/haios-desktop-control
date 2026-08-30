@@ -69,12 +69,17 @@ describe("B6 staged activation helper boundaries", () => {
     expect(preflight).not.toContain('[DateTime]::UtcNow.ToString("o")');
     expect(preflight).toContain('$DestinationPath.replace-backup-');
   });
-  it("builds every live B6 runtime from the current tracked candidate into an isolated runtime root", async () => {
+  it("builds and independently reproduces every live B6 runtime from the current tracked candidate", async () => {
     const launcher = await readFile(join(process.cwd(), "scripts", "run-b6-project-expansion-runtime.mjs"), "utf8");
     const prepare = await readFile(join(process.cwd(), "scripts", "prepare-b6-runtime-build.mjs"), "utf8");
+    const attestation = await readFile(join(process.cwd(), "scripts", "b6-runtime-attestation.mjs"), "utf8");
     expect(launcher).not.toContain('"../dist/src/operator/b6-active-runtime.js"');
     for (const marker of ["prepare-b6-runtime-build.mjs", "pathToFileURL", "candidateManifestSha256", "compiledOutputSha256"]) expect(launcher).toContain(marker);
     for (const marker of ["--outDir", "mkdtemp", "runtime", "task-registry.m07.json", "task-effects.m07.json", "candidateManifestSha256", "compiledOutputSha256", "B6_RUNTIME_SOURCE_CHANGED_DURING_BUILD"]) expect(prepare).toContain(marker);
+    for (const marker of ["independentlyRebuildCurrentRuntime", "prepare-b6-runtime-build.mjs", "B6_RUNTIME_BUILD_REPRODUCTION_FAILED", "verifier.buildRoot"]) expect(attestation).toContain(marker);
+    expect(attestation).toContain('join(verifier.buildRoot, "src", "operator", "host-runtime-config.js")');
+    expect(attestation).toContain('join(verifier.buildRoot, "src", "operator", "protocol.js")');
+    expect(attestation).not.toContain('join(buildRoot, "src", "operator", "host-runtime-config.js")');
   });
   it("stage and final sealing validate canonical artifacts against current repository facts before issuing seals", async () => {
     const stageSeal = await readFile(join(process.cwd(), "scripts", "seal-b6-stage.mjs"), "utf8");
