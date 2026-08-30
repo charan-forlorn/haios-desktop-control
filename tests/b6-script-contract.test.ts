@@ -65,6 +65,9 @@ describe("B6 staged activation helper boundaries", () => {
     const preflight = await readFile(join(process.cwd(), "scripts", "preflight-b6-project-expansion.ps1"), "utf8");
     expect(preflight).not.toContain("Remove-Item -LiteralPath $EvidencePath");
     for (const marker of ["$stagedEvidencePath", "[IO.File]::Replace", "[IO.File]::Move", "Assert-LiveEvidence $stagedEvidence"]) expect(preflight).toContain(marker);
+    expect(preflight).toContain('[DateTimeOffset]::UtcNow.ToString("o")');
+    expect(preflight).not.toContain('[DateTime]::UtcNow.ToString("o")');
+    expect(preflight).toContain('$DestinationPath.replace-backup-');
   });
   it("builds every live B6 runtime from the current tracked candidate into an isolated runtime root", async () => {
     const launcher = await readFile(join(process.cwd(), "scripts", "run-b6-project-expansion-runtime.mjs"), "utf8");

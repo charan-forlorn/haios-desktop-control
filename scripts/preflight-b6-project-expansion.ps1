@@ -83,8 +83,11 @@ function Read-JsonObject([string]$Path) {
 }
 function Commit-StagedFile([string]$StagedPath,[string]$DestinationPath) {
   Assert-Current (Test-Path -LiteralPath $StagedPath -PathType Leaf)
-  if(Test-Path -LiteralPath $DestinationPath -PathType Leaf){ [IO.File]::Replace($StagedPath,$DestinationPath,$null,$true) }
-  else { [IO.File]::Move($StagedPath,$DestinationPath) }
+  if(Test-Path -LiteralPath $DestinationPath -PathType Leaf){
+    $backupPath="$DestinationPath.replace-backup-$PID-$([guid]::NewGuid().ToString('N'))"
+    try { [IO.File]::Replace($StagedPath,$DestinationPath,$backupPath,$true) }
+    finally { if(Test-Path -LiteralPath $backupPath -PathType Leaf){ [IO.File]::Delete($backupPath) } }
+  } else { [IO.File]::Move($StagedPath,$DestinationPath) }
 }
 function Assert-LiveEvidence($Evidence,$CandidateFacts,$SkillFacts) {
   Assert-ExactFields $Evidence $evidenceFields
@@ -167,7 +170,7 @@ if($Stage -eq "SKILL_FABRIC"){
       canonicalPath=$skillFacts.canonicalPath; gitCommonDirIdentity=$skillFacts.gitCommonDirIdentity; targetHeadSha=$skillFacts.head; targetTrackedCount=$skillFacts.trackedCount; targetManifestSha256=$skillFacts.manifestSha256
       liveQualificationEvidencePath=[IO.Path]::GetFullPath($expectedEvidencePath); liveQualificationEvidenceSha256=(Get-Sha256 $expectedEvidencePath); liveQualificationResult="PASS"
       exact13Tools=$true; projectAdmitted=$true; hermesOsDenied=$true; canonicalPreHeadSha=$skillFacts.head; canonicalPostHeadSha=$skillFacts.head
-      canonicalPreStatusClean=$true; canonicalPostStatusClean=$true; ownedResidueCount=0; effectPolicyVerified=$true; networkAuthority="NONE"; rollbackRecoveryClassification="SAFE_TO_ROLLBACK"; createdAt=[DateTime]::UtcNow.ToString("o")
+      canonicalPreStatusClean=$true; canonicalPostStatusClean=$true; ownedResidueCount=0; effectPolicyVerified=$true; networkAuthority="NONE"; rollbackRecoveryClassification="SAFE_TO_ROLLBACK"; createdAt=[DateTimeOffset]::UtcNow.ToString("o")
     }
     $certificate=[ordered]@{}; foreach($field in $certificateFields){if($field -ceq "certificationSha256"){$certificate[$field]=Get-CanonicalSha256 $unsigned}else{$certificate[$field]=$unsigned[$field]}}
     [IO.File]::WriteAllText($stagedCertificationPath,((ConvertTo-CanonicalJson $certificate)+"`n"),[Text.UTF8Encoding]::new($false))
@@ -212,7 +215,7 @@ if($Stage -eq "SKILL_FABRIC"){
         liveQualificationEvidencePath=[IO.Path]::GetFullPath($expectedStage2EvidencePath); liveQualificationEvidenceSha256=(Get-Sha256 $expectedStage2EvidencePath); liveQualificationResult="PASS"
         exact13Tools=$true; projectAdmitted=$true; skillFabricRegression=$true; operatorCanaryRegression=$true; wrongRootDenied=$true
         canonicalPreHeadSha=$hermesFacts.head; canonicalPostHeadSha=$hermesFacts.head; canonicalPreStatusClean=$true; canonicalPostStatusClean=$true; ownedResidueCount=0
-        effectPolicyVerified=$true; networkAuthority="NONE"; rollbackRecoveryClassification="SAFE_TO_ROLLBACK"; createdAt=[DateTime]::UtcNow.ToString("o")
+        effectPolicyVerified=$true; networkAuthority="NONE"; rollbackRecoveryClassification="SAFE_TO_ROLLBACK"; createdAt=[DateTimeOffset]::UtcNow.ToString("o")
       }
       $certificate=[ordered]@{}; foreach($field in $stage2CertificateFields){if($field -ceq "certificationSha256"){$certificate[$field]=Get-CanonicalSha256 $unsigned}else{$certificate[$field]=$unsigned[$field]}}
       [IO.File]::WriteAllText($stagedCertificationPath,((ConvertTo-CanonicalJson $certificate)+"`n"),[Text.UTF8Encoding]::new($false))
