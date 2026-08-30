@@ -2,8 +2,7 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { loadHostApiKey } from "../dist/src/operator/host-runtime-config.js";
-import { OPERATOR_V1_TOOL_NAMES } from "../dist/src/operator/protocol.js";
+import { loadCurrentB6RuntimeBinding } from "./b6-runtime-attestation.mjs";
 
 const expectedStage = process.argv[2];
 if (expectedStage !== "SKILL_FABRIC" && expectedStage !== "HERMES_OS") throw new Error("B6_PROBE_STAGE_REQUIRED");
@@ -15,6 +14,8 @@ const config = JSON.parse(await readFile(configPath, "utf8"));
 if (config.stage !== expectedStage) throw new Error("B6_PROBE_STAGE_DRIFT");
 const expectedScope = expectedStage === "SKILL_FABRIC" ? "B6_SKILL_FABRIC_ADMISSION" : "B6_HERMES_OS_ADMISSION";
 if (config.activationScope !== expectedScope) throw new Error("B6_PROBE_SCOPE_DRIFT");
+const runtimeBinding = await loadCurrentB6RuntimeBinding(expectedStage);
+const { loadHostApiKey, OPERATOR_V1_TOOL_NAMES } = runtimeBinding;
 const apiKey = await loadHostApiKey(apiKeyFile);
 const client = new Client({ name: "b6-project-expansion-host-probe", version: "1.0.0" });
 const payload = (result) => JSON.parse(result.content.filter((item) => item.type === "text").map((item) => item.text ?? "").join("\n"));

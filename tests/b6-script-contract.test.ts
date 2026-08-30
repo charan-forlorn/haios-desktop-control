@@ -66,6 +66,18 @@ describe("B6 staged activation helper boundaries", () => {
     expect(preflight).not.toContain("Remove-Item -LiteralPath $EvidencePath");
     for (const marker of ["$stagedEvidencePath", "[IO.File]::Replace", "[IO.File]::Move", "Assert-LiveEvidence $stagedEvidence"]) expect(preflight).toContain(marker);
   });
+  it("builds every live B6 runtime from the current tracked candidate into an isolated runtime root", async () => {
+    const launcher = await readFile(join(process.cwd(), "scripts", "run-b6-project-expansion-runtime.mjs"), "utf8");
+    const prepare = await readFile(join(process.cwd(), "scripts", "prepare-b6-runtime-build.mjs"), "utf8");
+    expect(launcher).not.toContain('"../dist/src/operator/b6-active-runtime.js"');
+    for (const marker of ["prepare-b6-runtime-build.mjs", "pathToFileURL", "candidateManifestSha256", "compiledOutputSha256"]) expect(launcher).toContain(marker);
+    for (const marker of ["--outDir", "mkdtemp", "runtime", "task-registry.m07.json", "task-effects.m07.json", "candidateManifestSha256", "compiledOutputSha256", "B6_RUNTIME_SOURCE_CHANGED_DURING_BUILD"]) expect(prepare).toContain(marker);
+  });
+  it("final sealing accepts only canonical stage artifacts and revalidates their live evidence bytes", async () => {
+    const finalSeal = await readFile(join(process.cwd(), "scripts", "seal-b6-final.mjs"), "utf8");
+    for (const marker of ["stage1-final-certification.json", "stage2-final-certification.json", "stage1-live-qualification.json", "stage2-live-qualification.json",
+      "liveQualificationEvidenceSha256", "effectPolicyVerified", "rollbackRecoveryClassification", "hermesOsDenied", "skillFabricRegression", "operatorCanaryRegression", "wrongRootDenied", "unknownProjectDenied", "B6_FINAL_ARTIFACT_PATH_DENIED"]) expect(finalSeal).toContain(marker);
+  });
   it("implements live Stage-2 qualification and durable stage/final seal artifacts", async () => {
     const live = await readFile(join(process.cwd(), "scripts", "qualify-b6-live-stage.mjs"), "utf8");
     const qualify = await readFile(join(process.cwd(), "scripts", "qualify-b6-stage.ps1"), "utf8");

@@ -14,6 +14,12 @@ const terminal = stage === "SKILL_FABRIC"
   ? "HAIOS_DESKTOP_CONTROL_PLANE_R1_B6_SKILL_FABRIC_ADMISSION_QUALIFIED"
   : "HAIOS_DESKTOP_CONTROL_PLANE_R1_B6_HERMES_OS_ADMISSION_QUALIFIED";
 const outDir = dirname(certificationPath);
+const localAppData = process.env.LOCALAPPDATA;
+if (!localAppData) throw new Error("B6_STAGE_SEAL_LOCALAPPDATA_REQUIRED");
+const expectedRoot = resolve(localAppData, "HAIOS", "B6", "evidence", stage === "SKILL_FABRIC" ? "stage1" : "stage2");
+const expectedCertificationPath = resolve(expectedRoot, stage === "SKILL_FABRIC" ? "stage1-final-certification.json" : "stage2-final-certification.json");
+const expectedEvidencePath = resolve(expectedRoot, stage === "SKILL_FABRIC" ? "stage1-live-qualification.json" : "stage2-live-qualification.json");
+if (certificationPath !== expectedCertificationPath || evidencePath !== expectedEvidencePath) throw new Error("B6_STAGE_ARTIFACT_PATH_DENIED");
 const sha = (bytes) => createHash("sha256").update(bytes).digest("hex");
 function stableJson(value) {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
