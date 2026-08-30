@@ -42,7 +42,7 @@ $listener8768Before=@(Get-ListenerIdentity 8768);$listener8769Before=@(Get-Liste
 $dedicatedBefore=Get-ContainerDigest $DedicatedTunnel;$sharedBefore=Get-ContainerDigest $SharedTunnel;$dedicated=(& docker.exe inspect $DedicatedTunnel|ConvertFrom-Json)[0];if(-not((@($dedicated.Args)-join ' ').Contains($ExpectedTunnelRoute))){throw "M12_PRELIVE_TUNNEL_ROUTE_DRIFT"}
 New-Item -ItemType Directory -Force -Path $EvidenceRoot|Out-Null
 [IO.File]::WriteAllText((Join-Path $EvidenceRoot "source-manifest.txt"),$manifest.text,[Text.UTF8Encoding]::new($false))
-$full_test_sha256=Invoke-Logged "full-regression" {& npx.cmd vitest run --passWithNoTests --exclude 'dist/**'}
+$full_test_sha256=Invoke-Logged "full-regression" {& npx.cmd vitest run --passWithNoTests --exclude 'dist/**' --maxWorkers=1 --minWorkers=1 --maxWorkers=1 --minWorkers=1}
 $typecheck_sha256=Invoke-Logged "typecheck" {& npm.cmd run typecheck}
 $build_sha256=Invoke-Logged "build" {& npm.cmd run build}
 $diffCheckLog=Join-Path $EvidenceRoot "diff-check.log";& git.exe -C $Root diff --check *> $diffCheckLog;if($LASTEXITCODE -ne 0){throw "M12_PRELIVE_DIFF_CHECK_FAILED"};$diff_check_sha256=Get-Sha256 $diffCheckLog
