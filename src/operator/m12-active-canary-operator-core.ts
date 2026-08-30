@@ -514,7 +514,7 @@ class RuntimeFactsProvider implements M12StabilityFactsProvider {
   }
 }
 
-async function assertStatePaths(config: Pick<FinalB5OperatorCompositionConfig, "stateRoot" | "worktreeRoot">): Promise<void> {
+async function assertStatePaths(config: Pick<M12OperatorCompositionConfig, "stateRoot" | "worktreeRoot">): Promise<void> {
   await mkdir(config.stateRoot, { recursive: true });
   await mkdir(config.worktreeRoot, { recursive: true });
   const stateReal = await realpath(config.stateRoot);
@@ -523,14 +523,14 @@ async function assertStatePaths(config: Pick<FinalB5OperatorCompositionConfig, "
     throw new Error("M12_ACTIVE_CANARY_STATE_PATH_RECONCILIATION_REQUIRED");
   }
 }
-export interface FinalB5OperatorCompositionConfig {
+interface M12OperatorCompositionConfig {
   readonly worktreeRoot: string;
   readonly stateRoot: string;
   readonly allowedProjects: Readonly<Partial<Record<"operator-canary" | "skill-fabric" | "hermes-os", string>>>;
 }
 
 async function createM12Operator(
-  config: FinalB5OperatorCompositionConfig,
+  config: M12OperatorCompositionConfig,
   recoveryOptions: Omit<M12RecoveryRuntimeConfig, "stateRoot" | "worktreeRoot"> = {},
 ): Promise<M12ActiveCanaryOperatorRuntime> {
   await assertStatePaths(config);
@@ -578,13 +578,39 @@ export function createM12ActiveCanaryReadinessMetadata(config: unknown): M12Acti
 export async function createM12ActiveCanaryOperatorRuntime(config: unknown): Promise<M12ActiveCanaryOperatorRuntime> {
   return createM12Operator(validateM12ActiveCanaryConfig(config));
 }
-/** Internal final-B5 composition seam used by the strictly closed B6 successor only. */
-export async function createFinalB5OperatorRuntime(config: FinalB5OperatorCompositionConfig): Promise<M12ActiveCanaryOperatorRuntime> {
-  const ids = Object.keys(config.allowedProjects);
-  if (ids.length === 0 || ids.some((id) => id !== "operator-canary" && id !== "skill-fabric" && id !== "hermes-os")) {
+export interface B6FinalB5OperatorCompositionConfig {
+  readonly stateRoot: string;
+  readonly worktreeRoot: string;
+  readonly stage: "SKILL_FABRIC" | "HERMES_OS";
+}
+const B6_FINAL_COMPOSITION_FIELDS = new Set(["stateRoot", "worktreeRoot", "stage"]);
+const B6_FINAL_SKILL_FABRIC_ROOT = "C:\\Workspace\\haios-skill-fabric" as const;
+const B6_FINAL_HERMES_OS_ROOT = "C:\\Workspace\\hermes-ai-operating-system-b6-canonical" as const;
+function validateB6FinalComposition(value: unknown): B6FinalB5OperatorCompositionConfig {
+  if (typeof value !== "object" || value === null || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) {
     throw new Error("M12_FINAL_B5_PROJECT_POLICY_DENIED");
   }
-  return createM12Operator(config);
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  const keys = Reflect.ownKeys(descriptors);
+  if (keys.length !== B6_FINAL_COMPOSITION_FIELDS.size || keys.some((key) => typeof key !== "string" || !B6_FINAL_COMPOSITION_FIELDS.has(key) || !("value" in descriptors[key]!))) {
+    throw new Error("M12_FINAL_B5_PROJECT_POLICY_DENIED");
+  }
+  const stateRoot = descriptors.stateRoot?.value; const worktreeRoot = descriptors.worktreeRoot?.value; const stage = descriptors.stage?.value;
+  const localAppData = process.env.LOCALAPPDATA;
+  if (typeof stateRoot !== "string" || typeof worktreeRoot !== "string" || (stage !== "SKILL_FABRIC" && stage !== "HERMES_OS")
+    || typeof localAppData !== "string" || localAppData.length === 0) throw new Error("M12_FINAL_B5_PROJECT_POLICY_DENIED");
+  const expectedStateRoot = win32.join(localAppData, "HAIOS", "B6");
+  const expectedWorktreeRoot = win32.join(expectedStateRoot, "worktrees");
+  if (!samePath(stateRoot, expectedStateRoot) || !samePath(worktreeRoot, expectedWorktreeRoot)) throw new Error("M12_FINAL_B5_PROJECT_POLICY_DENIED");
+  return Object.freeze({ stateRoot: expectedStateRoot, worktreeRoot: expectedWorktreeRoot, stage });
+}
+/** B6-only final-B5 seam: state paths and project roots are server-owned and never caller-selected. */
+export async function createB6FinalB5OperatorRuntime(value: unknown): Promise<M12ActiveCanaryOperatorRuntime> {
+  const config = validateB6FinalComposition(value);
+  const allowedProjects = config.stage === "SKILL_FABRIC"
+    ? Object.freeze({ "operator-canary": M12_ACTIVE_CANARY_PROJECT_ROOT, "skill-fabric": B6_FINAL_SKILL_FABRIC_ROOT })
+    : Object.freeze({ "operator-canary": M12_ACTIVE_CANARY_PROJECT_ROOT, "skill-fabric": B6_FINAL_SKILL_FABRIC_ROOT, "hermes-os": B6_FINAL_HERMES_OS_ROOT });
+  return createM12Operator({ stateRoot: config.stateRoot, worktreeRoot: config.worktreeRoot, allowedProjects });
 }
 export function isM12ActiveCanaryOperatorRuntime(value: unknown): value is M12ActiveCanaryOperatorRuntime {
   return typeof value === "object" && value !== null && M12_CORE_RUNTIMES.has(value as object);

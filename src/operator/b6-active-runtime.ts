@@ -2,7 +2,7 @@ import { createGatewayServer, type GatewayRuntime } from "../server.js";
 import type { DesktopCommanderReadClient } from "../upstream.js";
 
 import { loadHostApiKey } from "./host-runtime-config.js";
-import { createFinalB5OperatorRuntime, type M12ActiveCanaryOperatorRuntime } from "./m12-active-canary-operator-core.js";
+import { createB6FinalB5OperatorRuntime, type M12ActiveCanaryOperatorRuntime } from "./m12-active-canary-operator-core.js";
 import { M08_QUALIFIED_RUNTIME_IDENTITY } from "./qualified-control-runtime.js";
 import { B6_PRODUCTION_PORT, type B6RuntimeConfig, validateB6RuntimeConfig } from "./b6-project-expansion.js";
 
@@ -45,7 +45,7 @@ export function createB6ReadinessMetadata(value: unknown): B6ReadinessMetadata {
 /** Composes the certified final-B5 recovery/remediation implementation under a B6-owned state root. */
 export async function createB6OperatorRuntime(value: unknown): Promise<M12ActiveCanaryOperatorRuntime> {
   const config = validateB6RuntimeConfig(value);
-  return createFinalB5OperatorRuntime({ stateRoot: config.stateRoot, worktreeRoot: config.worktreeRoot, allowedProjects: config.allowedProjects });
+  return createB6FinalB5OperatorRuntime({ stateRoot: config.stateRoot, worktreeRoot: config.worktreeRoot, stage: config.stage });
 }
 
 export async function createB6ActiveRuntime(value: unknown): Promise<GatewayRuntime> {
