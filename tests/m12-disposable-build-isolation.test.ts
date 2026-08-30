@@ -10,6 +10,8 @@ describe("M12 disposable build isolation", () => {
     expect(source).toContain('mkdtemp(join(ROOT, "runtime", "m12-disposable-build-")');
     expect(source).toContain('mkdir(join(ROOT, "runtime"), { recursive: true })');
     expect(source).toContain('"--outDir", distRoot');
+    expect(source).toContain('copyFile(join(ROOT, "task-registry.m07.json"), join(distRoot, "task-registry.m07.json"))');
+    expect(source).toContain('copyFile(join(ROOT, "task-effects.m07.json"), join(distRoot, "task-effects.m07.json"))');
     expect(source).toContain("runtimeDistRoot");
     expect(source).not.toContain('const distRoot = join(ROOT, "dist")');
     expect(source).not.toContain('deterministicDirectoryDigest(join(ROOT, "dist"))');

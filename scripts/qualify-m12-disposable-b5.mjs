@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { access, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { access, copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { isAbsolute, join, relative, resolve, sep, win32 } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -88,6 +88,10 @@ async function prepareFreshRuntime() {
   const tscCli = join(ROOT, "node_modules", "typescript", "bin", "tsc");
   if (!(await exists(tscCli))) fail("M12_DISPOSABLE_BUILD_TOOL_MISSING");
   await executeFixed(process.execPath, [tscCli, "--project", join(ROOT, "tsconfig.json"), "--outDir", distRoot], ROOT, "FRESH_BUILD");
+  await Promise.all([
+    copyFile(join(ROOT, "task-registry.m07.json"), join(distRoot, "task-registry.m07.json")),
+    copyFile(join(ROOT, "task-effects.m07.json"), join(distRoot, "task-effects.m07.json")),
+  ]);
   const compiled = await deterministicDirectoryDigest(distRoot);
   const [control, config, active, localGit, protocol] = await Promise.all([
     import(pathToFileURL(join(distRoot, "src", "operator", "control-runtime.js")).href),
