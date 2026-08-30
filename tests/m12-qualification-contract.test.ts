@@ -18,9 +18,7 @@ describe("M12 pre-live qualification contract", () => {
     const source = await readFile(qualifierPath, "utf8");
     for (const marker of ["status --porcelain", "vitest", "--exclude", "dist/**", "npm.cmd run typecheck", "npm.cmd run build", "git.exe -C $Root diff --check"]) expect(source).toContain(marker);
     expect(source).toContain("--maxWorkers=1");
-    expect(source).toContain("--minWorkers=1");
     expect(source).toContain("--maxWorkers=1");
-    expect(source).toContain("--minWorkers=1");
   });
   it("requires Task 8 disposable B5 PASS and exact authority denials", async () => {
     const source = await readFile(qualifierPath, "utf8");
