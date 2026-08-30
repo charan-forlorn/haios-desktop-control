@@ -2,7 +2,6 @@ import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { access, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
-import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve, sep, win32 } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -83,7 +82,8 @@ async function prepareFreshRuntime() {
   const headSha = await git(["rev-parse", "HEAD"], ROOT);
   if (!/^[a-f0-9]{40}$/u.test(headSha)) fail("M12_DISPOSABLE_HEAD_INVALID");
   const source = await deterministicTrackedSourceManifest();
-  const distRoot = await mkdtemp(join(tmpdir(), "m12-disposable-build-"));
+  await mkdir(join(ROOT, "runtime"), { recursive: true });
+  const distRoot = await mkdtemp(join(ROOT, "runtime", "m12-disposable-build-"));
   runtimeDistRoot = distRoot;
   const tscCli = join(ROOT, "node_modules", "typescript", "bin", "tsc");
   if (!(await exists(tscCli))) fail("M12_DISPOSABLE_BUILD_TOOL_MISSING");
