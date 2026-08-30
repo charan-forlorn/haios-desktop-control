@@ -34,7 +34,10 @@ function executeGit(args, cwd) {
   });
 }
 async function git(args, cwd) { return executeGit(args, cwd); }
-function executeFixed(command, args, cwd, label) {
+async function assertTrackedWorktreeClean() {
+  const status = await git(["status", "--porcelain=v1", "--untracked-files=no"], ROOT);
+  if (status !== "") fail("M12_DISPOSABLE_TRACKED_WORKTREE_DIRTY");
+}function executeFixed(command, args, cwd, label) {
   return new Promise((resolveResult, rejectResult) => {
     execFile(command, args, { cwd, windowsHide: true, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 }, (error, stdout, stderr) => {
       if (error !== null) return rejectResult(new Error(`M12_DISPOSABLE_${label}_FAILED:${String(stderr)}`));
@@ -74,6 +77,7 @@ async function deterministicDirectoryDigest(root) {
   return Object.freeze({ sha256: digest(`${rows.join("\n")}\n`), fileCount: files.length });
 }
 async function prepareFreshRuntime() {
+  await assertTrackedWorktreeClean();
   const headSha = await git(["rev-parse", "HEAD"], ROOT);
   if (!/^[a-f0-9]{40}$/u.test(headSha)) fail("M12_DISPOSABLE_HEAD_INVALID");
   const source = await deterministicTrackedSourceManifest();
@@ -101,6 +105,7 @@ async function prepareFreshRuntime() {
     compiledOutputSha256: compiled.sha256, compiledFileCount: compiled.fileCount, freshBuild: true });
 }
 async function assertRuntimeProvenanceStable(provenance) {
+  await assertTrackedWorktreeClean();
   const [headSha, source, compiled] = await Promise.all([
     git(["rev-parse", "HEAD"], ROOT), deterministicTrackedSourceManifest(), deterministicDirectoryDigest(join(ROOT, "dist")),
   ]);

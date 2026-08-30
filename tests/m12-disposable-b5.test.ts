@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -45,6 +45,21 @@ describe("M12 disposable B5 qualification evidence provenance", () => {
     expect(text).not.toContain('new M12StabilityCoordinator');
     expect(text).not.toContain('"transaction.begin"');
   });
+
+  it("rejects qualification when any tracked worktree byte is dirty", async () => {
+    const packagePath = join(process.cwd(), "package.json");
+    const original = await readFile(packagePath, "utf8");
+    const dirtyOutput = await mkdtemp(join(tmpdir(), "m12-disposable-b5-dirty-"));
+    try {
+      await writeFile(packagePath, `${original}\n`, "utf8");
+      await expect(execFileAsync(process.execPath, [
+        harnessPath, "--run-id", "dirty-tracked-source", "--port", "19087", "--output-root", dirtyOutput,
+      ], { cwd: process.cwd(), windowsHide: true })).rejects.toThrow("M12_DISPOSABLE_TRACKED_WORKTREE_DIRTY");
+    } finally {
+      await writeFile(packagePath, original, "utf8");
+      await rm(dirtyOutput, { recursive: true, force: true });
+    }
+  }, 30_000);
 
   it("cryptographically binds the result to the current committed source and exact freshly built runtime bytes", async () => {
     const head = (await execFileAsync("git", ["rev-parse", "HEAD"], {
