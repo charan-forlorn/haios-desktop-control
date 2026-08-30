@@ -192,9 +192,9 @@ export function decideRemediation(previousInput: RemediationEpisodeRecord | unde
   const currentAttempt = previous?.attempt ?? 1;
   const replanUsed = previous?.replanUsed ?? false;
 
-  if (observation.failure === "NOT_A_FAILURE") return decision("PASS", currentAttempt, replanUsed);
   const safety = safetyDirective(observation);
   if (safety !== undefined) return decision(safety, currentAttempt, replanUsed);
+  if (observation.failure === "NOT_A_FAILURE") return decision("PASS", currentAttempt, replanUsed);
   if (observation.failure === "NON_REMEDIABLE_FAILURE") {
     return decision("MANUAL_RECONCILIATION_REQUIRED", currentAttempt, replanUsed);
   }

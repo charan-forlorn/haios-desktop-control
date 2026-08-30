@@ -188,6 +188,17 @@ describe("M12 bounded remediation controller transition matrix", () => {
       .toMatchObject({ directive: "REPLAN_REQUIRED", attempt: 2 });
   });
 
+  it("never returns PASS for a successful task when safety facts require rollback or reconciliation", () => {
+    expect(decideRemediation(undefined, observation({ failure: "NOT_A_FAILURE", authority: "UNKNOWN" })))
+      .toEqual({ directive: "MANUAL_RECONCILIATION_REQUIRED", attempt: 1, replanUsed: false });
+    expect(decideRemediation(undefined, observation({ failure: "NOT_A_FAILURE", currentness: "STALE" })))
+      .toEqual({ directive: "MANUAL_RECONCILIATION_REQUIRED", attempt: 1, replanUsed: false });
+    expect(decideRemediation(undefined, observation({ failure: "NOT_A_FAILURE", recovery: "SAFE_TO_ROLLBACK" })))
+      .toEqual({ directive: "ROLLBACK_REQUIRED", attempt: 1, replanUsed: false });
+    expect(decideRemediation(undefined, observation({ failure: "NOT_A_FAILURE" })))
+      .toEqual({ directive: "PASS", attempt: 1, replanUsed: false });
+  });
+
   it("records only a durably saved remediation-eligible failure and retains the server decision", async () => {
     const { controller, store } = await controllerFixture();
 

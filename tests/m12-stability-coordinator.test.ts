@@ -113,6 +113,13 @@ describe("M12 stability coordinator", () => {
       .resolves.toMatchObject({ directive: "MANUAL_RECONCILIATION_REQUIRED", recovery: "MANUAL_RECONCILIATION_REQUIRED" });
   });
 
+  it("routes a successful task with stale currentness away from PASS", async () => {
+    const { coordinator, facts } = await fixture(); facts.currentness = "STALE";
+    await expect(coordinator.observeTaskResult(request, allowed())).resolves.toMatchObject({
+      directive: "MANUAL_RECONCILIATION_REQUIRED", attempt: 1, replanUsed: false,
+    });
+  });
+
   it("terminates a clean success with PASS without persisting a failure", async () => {
     const { coordinator } = await fixture();
     await expect(coordinator.observeTaskResult(request, allowed())).resolves.toMatchObject({ directive: "PASS", attempt: 1 });
