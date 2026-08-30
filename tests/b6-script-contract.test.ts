@@ -38,7 +38,7 @@ describe("B6 staged activation helper boundaries", () => {
     for (const marker of ["certificationHmacSha256", "liveQualificationEvidenceHmacSha256", "HMACSHA256", "operator-api-key"]) expect(preflight).toContain(marker);
     expect(runtime).toContain("verifyB6StageOneAdmission");
     const proof = await readFile(join(process.cwd(), "src", "operator", "b6-stage-one-proof.ts"), "utf8");
-    for (const marker of ["certificationHmacSha256", "liveQualificationEvidenceHmacSha256"]) expect(proof).toContain(marker);
+    for (const marker of ["certificationHmacSha256", "liveQualificationEvidenceHmacSha256", "B6_CANDIDATE_ROOT", "SKILL_ROOT", "ls-files", "gitCommonDirIdentity", "porcelain=v1"]) expect(proof).toContain(marker);
     expect(launcher).toContain('config.stage === "HERMES_OS"');
     expect(launcher).toContain("-ValidateOnly");
     expect(launcher).toContain("stage1-final-certification.json");

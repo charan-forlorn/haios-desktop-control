@@ -1,3 +1,4 @@
+import { createHash, createHmac } from "node:crypto";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, win32 } from "node:path";
@@ -5,6 +6,7 @@ import { describe, expect, it } from "vitest";
 
 import * as core from "../src/operator/m12-active-canary-operator-core.js";
 import { createB6ActiveRuntime } from "../src/operator/b6-active-runtime.js";
+import { verifyB6StageOneAdmission } from "../src/operator/b6-stage-one-proof.js";
 
 describe("B6 final-B5 composition boundary", () => {
   it("exposes only the B6 server-owned composition seam", () => {
@@ -34,6 +36,23 @@ describe("B6 final-B5 composition boundary", () => {
       if (previous === undefined) delete process.env.LOCALAPPDATA; else process.env.LOCALAPPDATA = previous;
       await rm(root, { recursive: true, force: true });
     }
+  });
+
+  it("rejects a valid authenticated Stage-1 certificate when current B6 bytes have drifted", async () => {
+    const previous = process.env.LOCALAPPDATA; const root = await mkdtemp(join(tmpdir(), "b6-stale-proof-"));
+    try {
+      process.env.LOCALAPPDATA = root; const key = "0123456789abcdef0123456789abcdef";
+      const keyDir = join(root, "HAIOS", "M10"); const evidenceDir = join(root, "HAIOS", "B6", "evidence", "stage1");
+      await mkdir(keyDir, { recursive: true }); await mkdir(evidenceDir, { recursive: true }); await writeFile(join(keyDir, "operator-api-key"), `${key}\n`, "utf8");
+      const stable = (v: unknown): string => v === null || typeof v !== "object" ? JSON.stringify(v) : Array.isArray(v) ? `[${v.map(stable).join(",")}]` : `{${Object.keys(v as Record<string, unknown>).sort().map(k => `${JSON.stringify(k)}:${stable((v as Record<string, unknown>)[k])}`).join(",")}}`;
+      const sha = (b: Buffer) => createHash("sha256").update(b).digest("hex"); const hmac = (b: Buffer) => createHmac("sha256", Buffer.from(key)).update(b).digest("hex");
+      const evidence = { schema:"HAIOS_B6_STAGE1_LIVE_QUALIFICATION_R1", result:"PASS", hermesOsDenied:true, b6CandidateHeadSha:"0000000000000000000000000000000000000000", b6CandidateManifestSha256:"0".repeat(64), skillFabricHeadSha:"51790d8fa098fa4b07b1424faee604dde9fa89fe", skillFabricManifestSha256:"2aafb2c5f568ff49d4a1cc3b623cd36e0a49e7708e665ff78a48d3b1a084f340" };
+      const evidenceBytes = Buffer.from(`${JSON.stringify(evidence)}\n`); const evidencePath = join(evidenceDir, "stage1-live-qualification.json"); await writeFile(evidencePath, evidenceBytes);
+      const unsigned: Record<string, unknown> = { schema:"HAIOS_B6_STAGE_CERTIFICATION_R1", stage:"SKILL_FABRIC", terminal:"HAIOS_DESKTOP_CONTROL_PLANE_R1_B6_SKILL_FABRIC_ADMISSION_QUALIFIED", targetProjectId:"skill-fabric", b6CandidateHeadSha:evidence.b6CandidateHeadSha, b6CandidateTrackedCount:223, b6CandidateManifestSha256:evidence.b6CandidateManifestSha256, canonicalPath:"C:\\Workspace\\haios-skill-fabric", gitCommonDirIdentity:"C:\\Workspace\\haios-skill-fabric\\.git", targetHeadSha:evidence.skillFabricHeadSha, targetTrackedCount:47, targetManifestSha256:evidence.skillFabricManifestSha256, liveQualificationEvidencePath:evidencePath, liveQualificationEvidenceSha256:sha(evidenceBytes), liveQualificationEvidenceHmacSha256:hmac(evidenceBytes), liveQualificationResult:"PASS", createdAt:new Date().toISOString() };
+      const certificationSha256 = sha(Buffer.from(stable(unsigned))); const authenticated = { ...unsigned, certificationSha256 }; const cert = { ...authenticated, certificationHmacSha256:hmac(Buffer.from(stable(authenticated))) };
+      await writeFile(join(evidenceDir, "stage1-final-certification.json"), `${JSON.stringify(cert)}\n`, "utf8");
+      await expect(verifyB6StageOneAdmission()).rejects.toThrow("B6_STAGE_ONE_AUTHENTICATED_PROOF_REQUIRED");
+    } finally { if(previous===undefined) delete process.env.LOCALAPPDATA; else process.env.LOCALAPPDATA=previous; await rm(root,{recursive:true,force:true}); }
   });
 
   it("denies caller-selected state paths and project maps before composition", async () => {

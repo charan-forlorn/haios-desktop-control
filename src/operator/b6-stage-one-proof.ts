@@ -1,8 +1,15 @@
+import { execFileSync } from "node:child_process";
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
-import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { readFile, realpath } from "node:fs/promises";
+import { isAbsolute, resolve } from "node:path";
 
 import { loadHostApiKey } from "./host-runtime-config.js";
+
+const B6_CANDIDATE_ROOT = "C:\\Workspace\\haios-desktop-control-b6";
+const SKILL_ROOT = "C:\\Workspace\\haios-skill-fabric";
+const SKILL_HEAD = "51790d8fa098fa4b07b1424faee604dde9fa89fe";
+const SKILL_TRACKED_COUNT = 47;
+const SKILL_MANIFEST = "2aafb2c5f568ff49d4a1cc3b623cd36e0a49e7708e665ff78a48d3b1a084f340";
 
 function stableJson(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
@@ -19,6 +26,39 @@ function hmacHex(apiKey: string, bytes: Buffer): string {
 }
 function shaHex(bytes: Buffer): string { return createHash("sha256").update(bytes).digest("hex"); }
 function deny(): never { throw new Error("B6_STAGE_ONE_AUTHENTICATED_PROOF_REQUIRED"); }
+function gitRaw(root: string, args: readonly string[]): string {
+  try {
+    return execFileSync("git", ["-C", root, ...args], {
+      encoding: "utf8", windowsHide: true, maxBuffer: 4 * 1024 * 1024,
+    });
+  } catch { return deny(); }
+}
+function samePath(left: string, right: string): boolean {
+  return resolve(left).toLowerCase() === resolve(right).toLowerCase();
+}
+async function repositoryFacts(root: string) {
+  const paths = gitRaw(root, ["ls-files", "-z"]).split("\0").filter(Boolean);
+  paths.sort((left, right) => left < right ? -1 : left > right ? 1 : 0);
+  const rows: string[] = [];
+  for (const relPath of paths) {
+    let bytes: Buffer;
+    try { bytes = await readFile(resolve(root, relPath)); } catch { return deny(); }
+    rows.push(`${shaHex(bytes)}  ${relPath.replaceAll("\\", "/")}`);
+  }
+  const commonRaw = gitRaw(root, ["rev-parse", "--git-common-dir"]).trim();
+  let canonicalPath: string; let gitCommonDirIdentity: string;
+  try {
+    canonicalPath = await realpath(root);
+    gitCommonDirIdentity = await realpath(isAbsolute(commonRaw) ? commonRaw : resolve(root, commonRaw));
+  } catch { return deny(); }
+  return Object.freeze({
+    canonicalPath, gitCommonDirIdentity,
+    head: gitRaw(root, ["rev-parse", "--verify", "HEAD"]).trim(),
+    trackedCount: paths.length,
+    manifestSha256: shaHex(Buffer.from(`${rows.join("\n")}\n`, "utf8")),
+    clean: gitRaw(root, ["status", "--porcelain=v1"]).trim() === "",
+  });
+}
 
 export async function verifyB6StageOneAdmission(): Promise<void> {
   const localAppData = process.env.LOCALAPPDATA;
@@ -48,14 +88,21 @@ export async function verifyB6StageOneAdmission(): Promise<void> {
   const ageMs = Date.now() - createdAt;
   if (cert.schema !== "HAIOS_B6_STAGE_CERTIFICATION_R1" || cert.stage !== "SKILL_FABRIC"
     || cert.terminal !== "HAIOS_DESKTOP_CONTROL_PLANE_R1_B6_SKILL_FABRIC_ADMISSION_QUALIFIED"
-    || cert.targetProjectId !== "skill-fabric" || cert.targetHeadSha !== "51790d8fa098fa4b07b1424faee604dde9fa89fe"
-    || cert.targetManifestSha256 !== "2aafb2c5f568ff49d4a1cc3b623cd36e0a49e7708e665ff78a48d3b1a084f340"
-    || cert.liveQualificationEvidencePath !== evidencePath || cert.liveQualificationResult !== "PASS"
-    || evidence.schema !== "HAIOS_B6_STAGE1_LIVE_QUALIFICATION_R1" || evidence.result !== "PASS"
-    || evidence.hermesOsDenied !== true
+    || cert.targetProjectId !== "skill-fabric" || cert.targetHeadSha !== SKILL_HEAD
+    || cert.targetManifestSha256 !== SKILL_MANIFEST || cert.liveQualificationEvidencePath !== evidencePath
+    || cert.liveQualificationResult !== "PASS" || evidence.schema !== "HAIOS_B6_STAGE1_LIVE_QUALIFICATION_R1"
+    || evidence.result !== "PASS" || evidence.hermesOsDenied !== true
     || evidence.b6CandidateHeadSha !== cert.b6CandidateHeadSha
     || evidence.b6CandidateManifestSha256 !== cert.b6CandidateManifestSha256
-    || evidence.skillFabricHeadSha !== cert.targetHeadSha
-    || evidence.skillFabricManifestSha256 !== cert.targetManifestSha256
+    || evidence.skillFabricHeadSha !== cert.targetHeadSha || evidence.skillFabricManifestSha256 !== cert.targetManifestSha256
     || !Number.isFinite(createdAt) || ageMs < -60_000 || ageMs > 900_000) return deny();
+
+  const [candidate, skill] = await Promise.all([repositoryFacts(B6_CANDIDATE_ROOT), repositoryFacts(SKILL_ROOT)]);
+  if (!candidate.clean || candidate.head !== cert.b6CandidateHeadSha || candidate.trackedCount !== cert.b6CandidateTrackedCount
+    || candidate.manifestSha256 !== cert.b6CandidateManifestSha256 || !skill.clean || skill.head !== SKILL_HEAD
+    || skill.trackedCount !== SKILL_TRACKED_COUNT || skill.manifestSha256 !== SKILL_MANIFEST
+    || cert.targetHeadSha !== skill.head || cert.targetTrackedCount !== skill.trackedCount
+    || cert.targetManifestSha256 !== skill.manifestSha256
+    || typeof cert.canonicalPath !== "string" || !samePath(cert.canonicalPath, skill.canonicalPath)
+    || typeof cert.gitCommonDirIdentity !== "string" || !samePath(cert.gitCommonDirIdentity, skill.gitCommonDirIdentity)) return deny();
 }
