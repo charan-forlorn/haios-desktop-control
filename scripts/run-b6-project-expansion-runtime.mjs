@@ -4,7 +4,7 @@ import { cp, mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from "n
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
-import { compiledDigest, verifyPreparedB6RuntimeBuild } from "./b6-runtime-attestation.mjs";
+import { compiledDigest, copyCurrentProductionDependencies, productionDependencyFacts, verifyPreparedB6RuntimeBuild } from "./b6-runtime-attestation.mjs";
 
 const run = promisify(execFile);
 async function currentUserSid() {
@@ -66,16 +66,22 @@ const executionParent = resolve(localAppData, "HAIOS", "B6", "runtime-exec");
 await mkdir(executionParent, { recursive: true });
 executionRoot = await mkdtemp(join(executionParent, "b6-exec-"));
 await cp(buildRoot, executionRoot, { recursive: true, force: false, errorOnExist: false });
+const dependencyFacts = await copyCurrentProductionDependencies(executionRoot);
 const executionMetadataPath = join(executionRoot, "b6-runtime-build.json");
-await writeFile(executionMetadataPath, `${JSON.stringify({ ...buildMetadata, buildRoot: executionRoot })}\n`, "utf8");
+await writeFile(executionMetadataPath, `${JSON.stringify({ ...buildMetadata, buildRoot: executionRoot, ...dependencyFacts })}\n`, "utf8");
 executionSid = await currentUserSid();
 await lockExecutionRoot(executionRoot, executionSid);
 const executionMetadata = JSON.parse(await readFile(executionMetadataPath, "utf8"));
 const executionDigest = await compiledDigest(executionRoot);
+const lockedDependencyFacts = await productionDependencyFacts(executionRoot);
 if (resolve(executionMetadata.buildRoot) !== executionRoot || executionMetadata.candidateHeadSha !== prepared.candidateHeadSha
   || executionMetadata.candidateManifestSha256 !== prepared.candidateManifestSha256
   || executionMetadata.compiledOutputSha256 !== prepared.compiledOutputSha256 || executionMetadata.compiledFileCount !== prepared.compiledFileCount
-  || executionDigest.compiledFileCount !== prepared.compiledFileCount || executionDigest.compiledOutputSha256 !== prepared.compiledOutputSha256) {
+  || executionMetadata.dependencyPackageRootCount !== dependencyFacts.dependencyPackageRootCount
+  || executionMetadata.dependencyFileCount !== dependencyFacts.dependencyFileCount || executionMetadata.dependencySha256 !== dependencyFacts.dependencySha256
+  || executionDigest.compiledFileCount !== prepared.compiledFileCount || executionDigest.compiledOutputSha256 !== prepared.compiledOutputSha256
+  || lockedDependencyFacts.dependencyPackageRootCount !== dependencyFacts.dependencyPackageRootCount
+  || lockedDependencyFacts.dependencyFileCount !== dependencyFacts.dependencyFileCount || lockedDependencyFacts.dependencySha256 !== dependencyFacts.dependencySha256) {
   throw new Error("B6_RUNTIME_EXECUTION_COPY_DRIFT");
 }
 await rm(preparedBuildRoot, { recursive: true, force: false });
@@ -94,14 +100,17 @@ const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 const unsignedAttestation = Object.freeze({ schema: "HAIOS_B6_RUNTIME_BUILD_ATTESTATION_R1", pid: process.pid,
   candidateHeadSha: prepared.candidateHeadSha, candidateTrackedCount: prepared.candidateTrackedCount,
   candidateManifestSha256: prepared.candidateManifestSha256, compiledFileCount: prepared.compiledFileCount,
-  compiledOutputSha256: prepared.compiledOutputSha256, buildRoot, stage: readiness.stage,
+  compiledOutputSha256: prepared.compiledOutputSha256, dependencyPackageRootCount: dependencyFacts.dependencyPackageRootCount,
+  dependencyFileCount: dependencyFacts.dependencyFileCount, dependencySha256: dependencyFacts.dependencySha256,
+  buildRoot, stage: readiness.stage,
   activationScope: readiness.activationScope, protocolMode: readiness.protocolMode, port: readiness.port });
 attestation = Object.freeze({ ...unsignedAttestation, attestationSha256: sha256(Buffer.from(stableJson(unsignedAttestation), "utf8")) });
 tempAttestationPath = `${attestationPath}.tmp-${process.pid}`;
 await writeFile(tempAttestationPath, `${JSON.stringify(attestation)}\n`, { encoding: "utf8", flag: "wx" });
 await rename(tempAttestationPath, attestationPath);
 process.stdout.write(`${JSON.stringify({ ...readiness, candidateHeadSha: prepared.candidateHeadSha,
-  candidateManifestSha256: prepared.candidateManifestSha256, compiledOutputSha256: prepared.compiledOutputSha256 })}\n`);
+  candidateManifestSha256: prepared.candidateManifestSha256, compiledOutputSha256: prepared.compiledOutputSha256,
+  dependencySha256: dependencyFacts.dependencySha256 })}\n`);
 } catch (error) {
   if (started) await started.close().catch(() => undefined);
   if (tempAttestationPath) await rm(tempAttestationPath, { force: true }).catch(() => undefined);

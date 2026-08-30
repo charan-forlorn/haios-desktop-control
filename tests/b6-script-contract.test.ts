@@ -123,6 +123,14 @@ describe("B6 staged activation helper boundaries", () => {
     expect(launcher).toContain('[executionRoot, "/reset", "/T", "/C"]');
     expect(launcher).toContain('`*${sid}:RX`');
     expect(launcher).toContain('"*S-1-5-18:F"');
+    expect(launcher).toContain("copyCurrentProductionDependencies(executionRoot)");
+    expect(launcher).toContain("productionDependencyFacts(executionRoot)");
+    expect(launcher).toContain("dependencySha256");
+    expect(attestation).toContain("productionDependencyFacts(buildRoot)");
+    expect(attestation).toContain("productionDependencyFacts(repoRoot)");
+    expect(attestation).toContain("dependencyPackageRootCount");
+    expect(attestation).toContain("dependencyFileCount");
+    expect(attestation).toContain("dependencySha256");
     expect(launcher.indexOf("await lockExecutionRoot(executionRoot, executionSid)")).toBeLessThan(launcher.indexOf("await import(pathToFileURL(join(executionRoot"));
     expect(launcher.indexOf("await rm(preparedBuildRoot")).toBeLessThan(launcher.indexOf("await import(pathToFileURL(join(executionRoot"));
     expect(attestation).toContain("runtime-exec");
