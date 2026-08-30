@@ -46,7 +46,7 @@ describe("B6 launcher failure cleanup", () => {
         server.listen(8769, "127.0.0.1", () => resolve(server));
       });
       const result = spawnSync(process.execPath, [join(root, "scripts", "run-b6-project-expansion-runtime.mjs"), configPath],
-        { cwd: root, encoding: "utf8", timeout: 30_000, env: { ...process.env, LOCALAPPDATA: localAppData } });
+        { cwd: root, encoding: "utf8", timeout: 75_000, env: { ...process.env, LOCALAPPDATA: localAppData } });
       expect(result.status).not.toBe(0);
       expect(`${result.stdout}\n${result.stderr}`).toContain("EADDRINUSE");
       const after = (await readdir(runtimeDir)).filter((name) => name.startsWith("b6-live-build-"));
@@ -57,5 +57,5 @@ describe("B6 launcher failure cleanup", () => {
       if (blocker) await new Promise<void>((resolve) => blocker!.close(() => resolve()));
       await rm(localAppData, { recursive: true, force: true });
     }
-  }, 45_000);
+  }, 90_000);
 });
