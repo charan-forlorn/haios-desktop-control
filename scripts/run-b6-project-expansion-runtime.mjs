@@ -4,8 +4,8 @@ import { cp, mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from "n
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
-import { compiledDigest, productionDependencyFacts, verifyPreparedB6RuntimeBuild } from "./b6-runtime-attestation.mjs";
-import { copyLockedProductionDependencies } from "./b6-lockfile-dependencies.mjs";
+import { compiledDigest, verifyPreparedB6RuntimeBuild } from "./b6-runtime-attestation.mjs";
+import { copyLockedProductionDependencies, productionDependencyFacts } from "./b6-lockfile-dependencies.mjs";
 
 const run = promisify(execFile);
 async function currentUserSid() {
