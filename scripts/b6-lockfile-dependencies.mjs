@@ -73,8 +73,12 @@ async function createOfflineLockedTree(includeDev) {
     const command = process.platform === "win32" ? (process.env.ComSpec ?? "C:\\Windows\\System32\\cmd.exe") : "npm";
     const commandArgs = process.platform === "win32" ? ["/d", "/s", "/c", "npm", ...args] : args;
     const cleanEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^npm_config_/iu.test(key)));
+    const home = process.platform === "win32" ? process.env.USERPROFILE : process.env.HOME;
+    if (typeof home !== "string" || home.length === 0) throw new Error("B6_RUNTIME_NPM_CACHE_REQUIRED");
+    const cacheCandidate = process.platform === "win32" ? join(home, "AppData", "Local", "npm-cache") : join(home, ".npm");
+    const cache = await realpath(cacheCandidate).catch(() => { throw new Error("B6_RUNTIME_NPM_CACHE_REQUIRED"); });
     await run(command, commandArgs, { cwd: root, encoding: "utf8", windowsHide: true, maxBuffer: 16 * 1024 * 1024,
-      env: { ...cleanEnv, npm_config_offline: "true", npm_config_ignore_scripts: "true", npm_config_audit: "false", npm_config_fund: "false", npm_config_update_notifier: "false" } });
+      env: { ...cleanEnv, npm_config_cache: cache, npm_config_offline: "true", npm_config_ignore_scripts: "true", npm_config_audit: "false", npm_config_fund: "false", npm_config_update_notifier: "false" } });
     const roots = await lockfilePackageRoots(includeDev, root);
     const facts = await dependencyDigest(root, roots);
     complete = true;
