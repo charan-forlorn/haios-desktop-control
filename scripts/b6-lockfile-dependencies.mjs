@@ -72,8 +72,9 @@ async function createOfflineLockedTree(includeDev) {
     if (!includeDev) args.splice(1, 0, "--omit=dev");
     const command = process.platform === "win32" ? (process.env.ComSpec ?? "C:\\Windows\\System32\\cmd.exe") : "npm";
     const commandArgs = process.platform === "win32" ? ["/d", "/s", "/c", "npm", ...args] : args;
+    const cleanEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^npm_config_/iu.test(key)));
     await run(command, commandArgs, { cwd: root, encoding: "utf8", windowsHide: true, maxBuffer: 16 * 1024 * 1024,
-      env: { ...process.env, npm_config_offline: "true", npm_config_ignore_scripts: "true", npm_config_audit: "false", npm_config_fund: "false", npm_config_update_notifier: "false" } });
+      env: { ...cleanEnv, npm_config_offline: "true", npm_config_ignore_scripts: "true", npm_config_audit: "false", npm_config_fund: "false", npm_config_update_notifier: "false" } });
     const roots = await lockfilePackageRoots(includeDev, root);
     const facts = await dependencyDigest(root, roots);
     complete = true;
