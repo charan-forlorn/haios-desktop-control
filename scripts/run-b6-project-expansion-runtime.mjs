@@ -65,7 +65,7 @@ buildRoot = await verifyPreparedB6RuntimeBuild(prepared);
 const executionParent = resolve(localAppData, "HAIOS", "B6", "runtime-exec");
 await mkdir(executionParent, { recursive: true });
 executionRoot = await mkdtemp(join(executionParent, "b6-exec-"));
-await cp(buildRoot, executionRoot, { recursive: true, force: false, errorOnExist: true });
+await cp(buildRoot, executionRoot, { recursive: true, force: false, errorOnExist: false });
 const executionMetadataPath = join(executionRoot, "b6-runtime-build.json");
 await writeFile(executionMetadataPath, `${JSON.stringify({ ...buildMetadata, buildRoot: executionRoot })}\n`, "utf8");
 executionSid = await currentUserSid();
