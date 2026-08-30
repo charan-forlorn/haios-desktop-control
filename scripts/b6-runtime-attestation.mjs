@@ -5,6 +5,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { lockedProductionDependencyFacts, productionDependencyFacts } from "./b6-lockfile-dependencies.mjs";
+import { assertAttestedListenerIdentity } from "./b6-process-identity.mjs";
 
 const run = promisify(execFile);
 export const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -22,6 +23,13 @@ export async function currentCandidateFacts() {
   for (const relPath of paths) rows.push(`${sha256(await readFile(join(repoRoot, relPath)))}  ${relPath.replaceAll("\\", "/")}`);
   return Object.freeze({ candidateHeadSha: await git(["rev-parse", "HEAD"]), candidateTrackedCount: paths.length,
     candidateManifestSha256: sha256(Buffer.from(`${rows.join("\n")}\n`, "utf8")), clean: (await git(["status", "--porcelain=v1"])) === "" });
+}
+export async function assertPreparedCandidateStillCurrent(prepared) {
+  const current = await currentCandidateFacts();
+  if (!current.clean || typeof prepared !== "object" || prepared === null
+    || current.candidateHeadSha !== prepared.candidateHeadSha || current.candidateTrackedCount !== prepared.candidateTrackedCount
+    || current.candidateManifestSha256 !== prepared.candidateManifestSha256) throw new Error("B6_RUNTIME_SOURCE_NOT_CURRENT");
+  return current;
 }
 export async function compiledDigest(buildRoot) {
   const files = [];
@@ -151,7 +159,7 @@ export async function loadCurrentB6RuntimeBinding(expectedStage) {
       || currentDependencies.dependencyFileCount !== attestation.dependencyFileCount || currentDependencies.dependencySha256 !== attestation.dependencySha256) {
       throw new Error("B6_RUNTIME_BUILD_REPRODUCTION_FAILED");
     }
-    try { process.kill(attestation.pid, 0); } catch { throw new Error("B6_RUNTIME_PROCESS_NOT_CURRENT"); }
+    await assertAttestedListenerIdentity(attestation, 8769);
     const hostConfig = await import(pathToFileURL(join(buildRoot, "src", "operator", "host-runtime-config.js")).href);
     const protocol = await import(pathToFileURL(join(buildRoot, "src", "operator", "protocol.js")).href);
     return Object.freeze({ attestation: Object.freeze(attestation), current, loadHostApiKey: hostConfig.loadHostApiKey,

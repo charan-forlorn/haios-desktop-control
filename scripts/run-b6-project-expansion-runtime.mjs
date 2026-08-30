@@ -4,8 +4,9 @@ import { cp, mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from "n
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
-import { compiledDigest, verifyPreparedB6RuntimeBuild } from "./b6-runtime-attestation.mjs";
+import { assertPreparedCandidateStillCurrent, compiledDigest, verifyPreparedB6RuntimeBuild } from "./b6-runtime-attestation.mjs";
 import { copyLockedProductionDependencies, productionDependencyFacts } from "./b6-lockfile-dependencies.mjs";
+import { assertAttestedListenerIdentity, inspectProcessIdentity } from "./b6-process-identity.mjs";
 
 const run = promisify(execFile);
 async function currentUserSid() {
@@ -67,6 +68,7 @@ if (config.stage === "HERMES_OS") {
   } catch { throw new Error("B6_STAGE_ONE_AUTHENTICATED_PROOF_REQUIRED"); }
 }
 buildRoot = await verifyPreparedB6RuntimeBuild(prepared);
+await assertPreparedCandidateStillCurrent(prepared);
 const executionParent = resolve(localAppData, "HAIOS", "B6", "runtime-exec");
 await mkdir(executionParent, { recursive: true });
 executionRoot = await mkdtemp(join(executionParent, "b6-exec-"));
@@ -91,6 +93,7 @@ if (resolve(executionMetadata.buildRoot) !== executionRoot || executionMetadata.
   || lockedDependencyFacts.dependencyFileCount !== dependencyFacts.dependencyFileCount || lockedDependencyFacts.dependencySha256 !== dependencyFacts.dependencySha256) {
   throw new Error("B6_RUNTIME_EXECUTION_COPY_DRIFT");
 }
+await assertPreparedCandidateStillCurrent(prepared);
 await rm(preparedBuildRoot, { recursive: true, force: false });
 buildRoot = executionRoot;
 const runtimeModule = await import(pathToFileURL(join(executionRoot, "src", "operator", "b6-active-runtime.js")).href);
@@ -104,7 +107,9 @@ const stableJson = (value) => {
   return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(",")}}`;
 };
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
-const unsignedAttestation = Object.freeze({ schema: "HAIOS_B6_RUNTIME_BUILD_ATTESTATION_R1", pid: process.pid,
+const processIdentity = await inspectProcessIdentity(process.pid);
+await assertAttestedListenerIdentity(processIdentity, readiness.port);
+const unsignedAttestation = Object.freeze({ schema: "HAIOS_B6_RUNTIME_BUILD_ATTESTATION_R1", pid: process.pid, ...processIdentity,
   candidateHeadSha: prepared.candidateHeadSha, candidateTrackedCount: prepared.candidateTrackedCount,
   candidateManifestSha256: prepared.candidateManifestSha256, compiledFileCount: prepared.compiledFileCount,
   compiledOutputSha256: prepared.compiledOutputSha256, toolchainPackageRootCount: prepared.toolchainPackageRootCount,
