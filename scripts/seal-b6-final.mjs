@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { execFile } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
@@ -28,6 +28,28 @@ function stableJson(value) {
   return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(",")}}`;
 }
 const canonical = (value) => `${stableJson(value)}\n`;
+const operatorKeyPath = resolve(localAppData, "HAIOS", "M10", "operator-api-key");
+function hexEqual(left, right) {
+  if (typeof left !== "string" || typeof right !== "string" || !/^[a-f0-9]{64}$/u.test(left) || !/^[a-f0-9]{64}$/u.test(right)) return false;
+  return timingSafeEqual(Buffer.from(left, "hex"), Buffer.from(right, "hex"));
+}
+async function loadOperatorKey() {
+  const key = (await readFile(operatorKeyPath, "utf8")).trim();
+  if (key.length < 16 || key.length > 512) throw new Error("B6_FINAL_OPERATOR_KEY_INVALID");
+  return key;
+}
+const hmac = (key, bytes) => createHmac("sha256", Buffer.from(key, "utf8")).update(bytes).digest("hex");
+async function verifyStageArtifactAuthentication(certBytes, evidenceBytes, cert) {
+  const key = await loadOperatorKey();
+  const { certificationHmacSha256, ...authenticated } = cert;
+  const { certificationSha256, ...unsigned } = authenticated;
+  if (!hexEqual(certificationSha256, sha(Buffer.from(stableJson(unsigned), "utf8")))
+    || !hexEqual(certificationHmacSha256, hmac(key, Buffer.from(stableJson(authenticated), "utf8")))
+    || !hexEqual(cert.liveQualificationEvidenceSha256, sha(evidenceBytes))
+    || !hexEqual(cert.liveQualificationEvidenceHmacSha256, hmac(key, evidenceBytes))) {
+    throw new Error("B6_FINAL_STAGE_AUTHENTICATION_INVALID");
+  }
+}
 async function git(root, args) { return (await run("git", ["-C", root, ...args], { encoding: "utf8", windowsHide: true })).stdout.trim(); }
 async function repositoryFacts(root) {
   const paths = (await git(root, ["ls-files", "-z"])).split("\0").filter(Boolean).sort();
@@ -63,6 +85,8 @@ const stageOneEvidenceBytes = await readFile(stageOneEvidencePath);
 const stageTwoEvidenceBytes = await readFile(stageTwoEvidencePath);
 const stageOneEvidence = JSON.parse(stageOneEvidenceBytes.toString("utf8"));
 const stageTwoEvidence = JSON.parse(stageTwoEvidenceBytes.toString("utf8"));
+await verifyStageArtifactAuthentication(stageOneBytes, stageOneEvidenceBytes, stageOne);
+await verifyStageArtifactAuthentication(stageTwoBytes, stageTwoEvidenceBytes, stageTwo);
 if (stageOne.liveQualificationEvidencePath !== stageOneEvidencePath || stageOne.liveQualificationEvidenceSha256 !== sha(stageOneEvidenceBytes)
   || stageOneEvidence.result !== "PASS" || stageOneEvidence.hermesOsDenied !== true || stageOneEvidence.effectPolicyVerified !== true
   || stageOneEvidence.networkAuthority !== "NONE" || stageOneEvidence.rollbackRecoveryClassification !== "SAFE_TO_ROLLBACK") throw new Error("B6_FINAL_STAGE1_LIVE_EVIDENCE_INVALID");
@@ -79,15 +103,44 @@ if (stageOne.b6CandidateHeadSha !== candidate.head || stageTwo.b6CandidateHeadSh
 }
 const stageOneSealPath = resolve(dirname(stageOnePath), "stage1-final-seal.json");
 const stageTwoSealPath = resolve(dirname(stageTwoPath), "stage2-final-seal.json");
+const stageOneBindingsPath = resolve(dirname(stageOnePath), "stage1-evidence-bindings.json");
+const stageTwoBindingsPath = resolve(dirname(stageTwoPath), "stage2-evidence-bindings.json");
+const stageOneSumsPath = resolve(dirname(stageOnePath), "SHA256SUMS.stage1.txt");
+const stageTwoSumsPath = resolve(dirname(stageTwoPath), "SHA256SUMS.stage2.txt");
 const stageOneSealBytes = await readFile(stageOneSealPath);
 const stageTwoSealBytes = await readFile(stageTwoSealPath);
-for (const [bytes, stage, terminal, certBytes, cert] of [[stageOneSealBytes,"SKILL_FABRIC",stageOne.terminal,stageOneBytes,stageOne],[stageTwoSealBytes,"HERMES_OS",stageTwo.terminal,stageTwoBytes,stageTwo]]) {
-  const value = JSON.parse(bytes.toString("utf8")); const { sealSha256, ...unsigned } = value;
-  if (value.stage !== stage || value.terminal !== terminal || sealSha256 !== sha(Buffer.from(stableJson(unsigned), "utf8"))
-    || value.certificationFileSha256 !== sha(certBytes) || value.b6CandidateHeadSha !== candidate.head
+const STAGE_SEAL_FIELDS = ["schema","stage","terminal","certificationFileSha256","evidenceSha256","bindingsSha256","sha256SumsSha256","b6CandidateHeadSha","b6CandidateManifestSha256","targetHeadSha","targetManifestSha256","sealSha256"].sort();
+async function verifyStageSeal({ sealBytes, stage, terminal, certBytes, cert, evidenceBytes, evidencePath, bindingsPath, sumsPath }) {
+  const [bindingsBytes, sumsBytes] = await Promise.all([readFile(bindingsPath), readFile(sumsPath)]);
+  const value = JSON.parse(sealBytes.toString("utf8"));
+  const fields = Object.keys(value).sort();
+  const bindings = JSON.parse(bindingsBytes.toString("utf8"));
+  const expectedSums = [
+    `${sha(certBytes)}  ${basename(stage === "SKILL_FABRIC" ? stageOnePath : stageTwoPath)}`,
+    `${sha(evidenceBytes)}  ${basename(evidencePath)}`,
+    `${sha(bindingsBytes)}  ${basename(bindingsPath)}`,
+  ].join("\n") + "\n";
+  const { sealSha256, ...unsigned } = value;
+  if (fields.length !== STAGE_SEAL_FIELDS.length || fields.some((field, index) => field !== STAGE_SEAL_FIELDS[index])
+    || value.schema !== "HAIOS_B6_STAGE_FINAL_SEAL_R1" || value.stage !== stage || value.terminal !== terminal
+    || sealSha256 !== sha(Buffer.from(stableJson(unsigned), "utf8")) || value.certificationFileSha256 !== sha(certBytes)
+    || value.evidenceSha256 !== sha(evidenceBytes) || value.bindingsSha256 !== sha(bindingsBytes) || value.sha256SumsSha256 !== sha(sumsBytes)
+    || sumsBytes.toString("utf8") !== expectedSums || value.b6CandidateHeadSha !== candidate.head
     || value.b6CandidateManifestSha256 !== candidate.manifestSha256 || value.targetHeadSha !== cert.targetHeadSha
     || value.targetManifestSha256 !== cert.targetManifestSha256) throw new Error("B6_FINAL_STAGE_SEAL_INVALID");
+  if (bindings.schema !== "HAIOS_B6_STAGE_EVIDENCE_BINDINGS_R1" || bindings.stage !== stage || bindings.terminal !== terminal
+    || resolve(bindings.certificationPath) !== (stage === "SKILL_FABRIC" ? stageOnePath : stageTwoPath)
+    || bindings.certificationFileSha256 !== sha(certBytes) || bindings.certificationSha256 !== cert.certificationSha256
+    || resolve(bindings.evidencePath) !== evidencePath || bindings.evidenceSha256 !== sha(evidenceBytes)
+    || bindings.b6CandidateHeadSha !== candidate.head || bindings.b6CandidateManifestSha256 !== candidate.manifestSha256
+    || bindings.targetHeadSha !== cert.targetHeadSha || bindings.targetManifestSha256 !== cert.targetManifestSha256) {
+    throw new Error("B6_FINAL_STAGE_BINDINGS_INVALID");
+  }
 }
+await verifyStageSeal({ sealBytes: stageOneSealBytes, stage: "SKILL_FABRIC", terminal: stageOne.terminal, certBytes: stageOneBytes,
+  cert: stageOne, evidenceBytes: stageOneEvidenceBytes, evidencePath: stageOneEvidencePath, bindingsPath: stageOneBindingsPath, sumsPath: stageOneSumsPath });
+await verifyStageSeal({ sealBytes: stageTwoSealBytes, stage: "HERMES_OS", terminal: stageTwo.terminal, certBytes: stageTwoBytes,
+  cert: stageTwo, evidenceBytes: stageTwoEvidenceBytes, evidencePath: stageTwoEvidencePath, bindingsPath: stageTwoBindingsPath, sumsPath: stageTwoSumsPath });
 const probe = await run("node", [resolve(repoRoot, "scripts", "probe-b6-project-expansion-host.mjs"), "HERMES_OS"], { cwd: repoRoot, encoding: "utf8", windowsHide: true });
 const probeResult = JSON.parse(probe.stdout.trim().split(/\r?\n/u).at(-1));
 if (!probeResult.exact_13_tools || !probeResult.target_admitted || !probeResult.target_rollback || probeResult.stage !== "HERMES_OS"

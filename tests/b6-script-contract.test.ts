@@ -114,6 +114,14 @@ describe("B6 staged activation helper boundaries", () => {
     for (const marker of ["stage1-final-certification.json", "stage2-final-certification.json", "stage1-live-qualification.json", "stage2-live-qualification.json",
       "liveQualificationEvidenceSha256", "effectPolicyVerified", "rollbackRecoveryClassification", "hermesOsDenied", "skillFabricRegression", "operatorCanaryRegression", "wrongRootDenied", "unknownProjectDenied", "stageOneSealSha256", "stageTwoSealSha256", "B6_FINAL_ARTIFACT_PATH_DENIED"]) expect(finalSeal).toContain(marker);
   });
+  it("final sealer re-authenticates the exact stage bytes and validates every stage-seal dependency", async () => {
+    const finalSeal = await readFile(join(process.cwd(), "scripts", "seal-b6-final.mjs"), "utf8");
+    for (const marker of ["createHmac", "timingSafeEqual", "loadOperatorKey", "verifyStageArtifactAuthentication",
+      "certificationHmacSha256", "liveQualificationEvidenceHmacSha256", "HAIOS_B6_STAGE_FINAL_SEAL_R1",
+      "stage1-evidence-bindings.json", "stage2-evidence-bindings.json", "SHA256SUMS.stage1.txt", "SHA256SUMS.stage2.txt",
+      "evidenceSha256", "bindingsSha256", "sha256SumsSha256"]) expect(finalSeal).toContain(marker);
+    expect(finalSeal.indexOf("await verifyStageArtifactAuthentication(stageOneBytes")).toBeGreaterThan(finalSeal.indexOf("stageOneEvidenceBytes = await readFile"));
+  });
   it("implements live Stage-2 qualification and durable stage/final seal artifacts", async () => {
     const live = await readFile(join(process.cwd(), "scripts", "qualify-b6-live-stage.mjs"), "utf8");
     const qualify = await readFile(join(process.cwd(), "scripts", "qualify-b6-stage.ps1"), "utf8");
