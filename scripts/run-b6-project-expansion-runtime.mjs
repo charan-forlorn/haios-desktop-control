@@ -25,7 +25,9 @@ const buildRel = relative(runtimeReal, buildRoot);
 if (buildRel === "" || isAbsolute(buildRel) || buildRel === ".." || buildRel.startsWith(`..${sep}`)) {
   throw new Error("B6_RUNTIME_BUILD_ROOT_DENIED");
 }
-const buildMetadata = JSON.parse(await readFile(join(buildRoot, "b6-runtime-build.json"), "utf8"));
+let started; let attestationPath; let tempAttestationPath; let attestation;
+try {
+  const buildMetadata = JSON.parse(await readFile(join(buildRoot, "b6-runtime-build.json"), "utf8"));
 if (buildMetadata.candidateHeadSha !== prepared.candidateHeadSha || buildMetadata.candidateManifestSha256 !== prepared.candidateManifestSha256
   || buildMetadata.compiledOutputSha256 !== prepared.compiledOutputSha256 || buildMetadata.compiledFileCount !== prepared.compiledFileCount) {
   throw new Error("B6_RUNTIME_BUILD_METADATA_DRIFT");
@@ -48,10 +50,10 @@ buildRoot = await verifyPreparedB6RuntimeBuild(prepared);
 const runtimeModule = await import(pathToFileURL(join(buildRoot, "src", "operator", "b6-active-runtime.js")).href);
 const verifiedPostImportRoot = await verifyPreparedB6RuntimeBuild(prepared);
 if (verifiedPostImportRoot !== buildRoot) throw new Error("B6_RUNTIME_BUILD_ROOT_DRIFT");
-const started = await runtimeModule.createB6ActiveRuntime(config);
+started = await runtimeModule.createB6ActiveRuntime(config);
 await started.listen();
 const readiness = runtimeModule.createB6ReadinessMetadata(config);
-const attestationPath = resolve(localAppData, "HAIOS", "B6", "runtime-build-attestation.json");
+attestationPath = resolve(localAppData, "HAIOS", "B6", "runtime-build-attestation.json");
 const stableJson = (value) => {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
@@ -63,12 +65,24 @@ const unsignedAttestation = Object.freeze({ schema: "HAIOS_B6_RUNTIME_BUILD_ATTE
   candidateManifestSha256: prepared.candidateManifestSha256, compiledFileCount: prepared.compiledFileCount,
   compiledOutputSha256: prepared.compiledOutputSha256, buildRoot, stage: readiness.stage,
   activationScope: readiness.activationScope, protocolMode: readiness.protocolMode, port: readiness.port });
-const attestation = Object.freeze({ ...unsignedAttestation, attestationSha256: sha256(Buffer.from(stableJson(unsignedAttestation), "utf8")) });
-const tempAttestationPath = `${attestationPath}.tmp-${process.pid}`;
+attestation = Object.freeze({ ...unsignedAttestation, attestationSha256: sha256(Buffer.from(stableJson(unsignedAttestation), "utf8")) });
+tempAttestationPath = `${attestationPath}.tmp-${process.pid}`;
 await writeFile(tempAttestationPath, `${JSON.stringify(attestation)}\n`, { encoding: "utf8", flag: "wx" });
 await rename(tempAttestationPath, attestationPath);
 process.stdout.write(`${JSON.stringify({ ...readiness, candidateHeadSha: prepared.candidateHeadSha,
   candidateManifestSha256: prepared.candidateManifestSha256, compiledOutputSha256: prepared.compiledOutputSha256 })}\n`);
+} catch (error) {
+  if (started) await started.close().catch(() => undefined);
+  if (tempAttestationPath) await rm(tempAttestationPath, { force: true }).catch(() => undefined);
+  if (attestationPath && attestation) {
+    try {
+      const current = JSON.parse(await readFile(attestationPath, "utf8"));
+      if (current.pid === process.pid && current.attestationSha256 === attestation.attestationSha256) await rm(attestationPath, { force: false });
+    } catch {}
+  }
+  await rm(buildRoot, { recursive: true, force: true }).catch(() => undefined);
+  throw error;
+}
 let closing = false;
 const close = async () => {
   if (closing) return;

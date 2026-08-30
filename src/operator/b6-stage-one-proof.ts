@@ -3,6 +3,7 @@ import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { readFile, realpath } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
 
+import { validateB6StageOneCertification } from "./b6-project-expansion.js";
 import { loadHostApiKey } from "./host-runtime-config.js";
 
 const B6_CANDIDATE_ROOT = "C:\\Workspace\\haios-desktop-control-b6";
@@ -10,6 +11,20 @@ const SKILL_ROOT = "C:\\Workspace\\haios-skill-fabric";
 const SKILL_HEAD = "51790d8fa098fa4b07b1424faee604dde9fa89fe";
 const SKILL_TRACKED_COUNT = 47;
 const SKILL_MANIFEST = "2aafb2c5f568ff49d4a1cc3b623cd36e0a49e7708e665ff78a48d3b1a084f340";
+
+const STAGE1_EVIDENCE_FIELDS = new Set([
+  "schema","stage","targetProjectId","result","b6CandidateHeadSha","b6CandidateManifestSha256",
+  "skillFabricHeadSha","skillFabricManifestSha256","exact13Tools","projectAdmitted","hermesOsDenied",
+  "canonicalPreHeadSha","canonicalPostHeadSha","canonicalPreStatusClean","canonicalPostStatusClean",
+  "ownedResidueCount","effectPolicyVerified","networkAuthority","rollbackRecoveryClassification",
+]);
+function exactRecord(value: unknown, fields: ReadonlySet<string>): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) return deny();
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  const keys = Reflect.ownKeys(descriptors);
+  if (keys.length !== fields.size || keys.some((key) => typeof key !== "string" || !fields.has(key) || !("value" in descriptors[key]!))) return deny();
+  return value as Record<string, unknown>;
+}
 
 function stableJson(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
@@ -74,8 +89,11 @@ export async function verifyB6StageOneAdmission(): Promise<void> {
     ]);
   } catch { return deny(); }
   let cert: Record<string, unknown>; let evidence: Record<string, unknown>;
-  try { cert = JSON.parse(certBytes.toString("utf8")); evidence = JSON.parse(evidenceBytes.toString("utf8")); }
-  catch { return deny(); }
+  try {
+    cert = JSON.parse(certBytes.toString("utf8"));
+    validateB6StageOneCertification(cert);
+    evidence = exactRecord(JSON.parse(evidenceBytes.toString("utf8")), STAGE1_EVIDENCE_FIELDS);
+  } catch { return deny(); }
   const certificationHmacSha256 = cert.certificationHmacSha256;
   const certificationSha256 = cert.certificationSha256;
   const authUnsigned = { ...cert }; delete authUnsigned.certificationHmacSha256;
@@ -91,10 +109,14 @@ export async function verifyB6StageOneAdmission(): Promise<void> {
     || cert.targetProjectId !== "skill-fabric" || cert.targetHeadSha !== SKILL_HEAD
     || cert.targetManifestSha256 !== SKILL_MANIFEST || cert.liveQualificationEvidencePath !== evidencePath
     || cert.liveQualificationResult !== "PASS" || evidence.schema !== "HAIOS_B6_STAGE1_LIVE_QUALIFICATION_R1"
-    || evidence.result !== "PASS" || evidence.hermesOsDenied !== true
+    || evidence.stage !== "SKILL_FABRIC" || evidence.targetProjectId !== "skill-fabric" || evidence.result !== "PASS"
+    || evidence.exact13Tools !== true || evidence.projectAdmitted !== true || evidence.hermesOsDenied !== true
     || evidence.b6CandidateHeadSha !== cert.b6CandidateHeadSha
     || evidence.b6CandidateManifestSha256 !== cert.b6CandidateManifestSha256
     || evidence.skillFabricHeadSha !== cert.targetHeadSha || evidence.skillFabricManifestSha256 !== cert.targetManifestSha256
+    || evidence.canonicalPreHeadSha !== cert.targetHeadSha || evidence.canonicalPostHeadSha !== cert.targetHeadSha
+    || evidence.canonicalPreStatusClean !== true || evidence.canonicalPostStatusClean !== true || evidence.ownedResidueCount !== 0
+    || evidence.effectPolicyVerified !== true || evidence.networkAuthority !== "NONE" || evidence.rollbackRecoveryClassification !== "SAFE_TO_ROLLBACK"
     || !Number.isFinite(createdAt) || ageMs < -60_000 || ageMs > 900_000) return deny();
 
   const [candidate, skill] = await Promise.all([repositoryFacts(B6_CANDIDATE_ROOT), repositoryFacts(SKILL_ROOT)]);
