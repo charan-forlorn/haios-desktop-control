@@ -34,7 +34,7 @@ describe("M12 pre-live qualification contract", () => {
   });
   it("records activation member hashes and independent-review handoff", async () => {
     const source = await readFile(qualifierPath, "utf8");
-    for (const marker of ["execute-m12-b5-activation.ps1", "rollback-m12-b5-to-m11.ps1", "probe-m12-b5-host.mjs", "preflight-m12-b5-activation.ps1", "independent-review-handoff.json"]) expect(source).toContain(marker);
+    for (const marker of ["execute-m12-b5-activation.ps1", "rollback-m12-b5-to-m11.ps1", "probe-m12-b5-host.mjs", "preflight-m12-b5-activation.ps1", "verify-m12-preserved-state.mjs", "independent-review-handoff.json"]) expect(source).toContain(marker);
   });
   it("emits only the exact pre-live terminal and exact next human decision", async () => {
     const source = await readFile(qualifierPath, "utf8");

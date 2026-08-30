@@ -127,6 +127,16 @@ describe("M12 sealed B5 activation transaction", () => {
     for (const marker of ["http://127.0.0.1:8769/mcp", 'result.mode === "ACTIVE"', 'result.activation_scope === "M12_B5_CANARY_STABILITY_ONLY"', "result.mutation_active === true", "result.s2_enabled === false", "result.generic_exec === false", "result.generic_shell === false", 'result.destructive === "LOCKED"']) expect(probe).toContain(marker);
   });
 
+  it("preserves verified durable M12 state and fails closed on unknown rollback residue", async () => {
+    const [preflight, execute, rollback] = await sources();
+    for (const source of [preflight, execute, rollback]) expect(source).toContain("verify-m12-preserved-state.mjs");
+    expect(rollback).not.toContain("Remove-Item -LiteralPath $StateRoot -Recurse -Force");
+    expect(rollback).toContain("M12_STATE_RECONCILIATION_REQUIRED");
+    expect(rollback).toContain("m12_state_preserved=$true");
+    expect(execute).not.toContain('if(Test-Path -LiteralPath $StateRoot){AuthorityFail "M12_STATE_COLLISION"}');
+    expect(execute).toContain("preserved_state_digest");
+    expect(preflight).toContain("preserved_state_digest");
+  });
   it("keeps all three PowerShell transaction scripts parse-clean", () => {
     for (const path of [preflightPath, executePath, rollbackPath]) {
       const command = ["$tokens=$null;$errors=$null;", `[System.Management.Automation.Language.Parser]::ParseFile('${path.replaceAll("'", "''")}',[ref]$tokens,[ref]$errors)|Out-Null;`, "if($errors.Count -gt 0){$errors|ForEach-Object{Write-Error $_.Message};exit 1}"].join("");

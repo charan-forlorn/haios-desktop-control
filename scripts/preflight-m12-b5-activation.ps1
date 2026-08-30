@@ -17,6 +17,7 @@ $ExpectedCanaryBranch="main"
 $M11Task="HAIOS-M11-Operator-Active-Canary"
 $M12Task="HAIOS-M12-Operator-B5-Canary-Stability"
 $M11RuntimeRoot="C:\Workspace\haios-desktop-control-m11-runtime"
+$StateRoot=[IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA "HAIOS\M12"))
 $M10ApiKeyFile=[IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA "HAIOS\M10\operator-api-key"))
 $DedicatedTunnel="haios-operator-dedicated-tunnel-client"
 $SharedTunnel="haios-tunnel-client"
@@ -93,14 +94,19 @@ $execute=Join-Path $Root "scripts\execute-m12-b5-activation.ps1"
 $rollback=Join-Path $Root "scripts\rollback-m12-b5-to-m11.ps1"
 $supervisor=Join-Path $Root "scripts\run-m12-active-canary-supervisor.mjs"
 $probe=Join-Path $Root "scripts\probe-m12-b5-host.mjs"
-foreach($path in @($execute,$rollback,$supervisor,$probe)){if(-not(Test-Path -LiteralPath $path)){throw "M12_ACTIVATION_MEMBER_MISSING:$path"}}
+$stateVerifier=Join-Path $Root "scripts\verify-m12-preserved-state.mjs"
+foreach($path in @($execute,$rollback,$supervisor,$probe,$stateVerifier)){if(-not(Test-Path -LiteralPath $path)){throw "M12_ACTIVATION_MEMBER_MISSING:$path"}}
+$oldNativeErrorPreference=$PSNativeCommandUseErrorActionPreference;$PSNativeCommandUseErrorActionPreference=$false
+try{$stateRaw=& "C:\Program Files\nodejs\node.exe" $stateVerifier 2>$null;$stateExit=$LASTEXITCODE}finally{$PSNativeCommandUseErrorActionPreference=$oldNativeErrorPreference}
+if($stateExit -ne 0 -or -not $stateRaw){throw "M12_STATE_RECONCILIATION_REQUIRED"};$stateProof=($stateRaw -join "`n")|ConvertFrom-Json
 $envelope=[ordered]@{
   environment="PRODUCTION";required_human_decision=$ExactDecision
   m11_final_terminal=$M11FinalTerminal;m11_final_cert_path=$M11FinalCertification;m11_final_cert_sha256=Get-Sha256 $M11FinalCertification
   m11_certified_head=$M11CertifiedHead;m11_certified_manifest_sha256=$M11CertifiedManifest
   m11_runtime_head=$m11RuntimeHead;m11_runtime_manifest_sha256=$m11RuntimeManifest
   candidate_head=$candidateHead;candidate_manifest_sha256=$candidateManifest
-  executor_sha256=Get-Sha256 $execute;rollback_sha256=Get-Sha256 $rollback;supervisor_sha256=Get-Sha256 $supervisor;probe_sha256=Get-Sha256 $probe
+  executor_sha256=Get-Sha256 $execute;rollback_sha256=Get-Sha256 $rollback;supervisor_sha256=Get-Sha256 $supervisor;probe_sha256=Get-Sha256 $probe;state_verifier_sha256=Get-Sha256 $stateVerifier
+  preserved_state_status=[string]$stateProof.status;preserved_state_digest=[string]$stateProof.digest
   canary_root=$CanaryRoot;canary_branch=$canaryBranch;canary_head=$canaryHead
   m10_api_key_sha256=Get-Sha256 $M10ApiKeyFile
   m11_task_name=$M11Task;m11_task_execute=[string]$m11Action.Execute;m11_task_arguments=[string]$m11Action.Arguments;m12_task_name=$M12Task
