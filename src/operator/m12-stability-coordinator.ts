@@ -54,6 +54,11 @@ function effectClass(result: OperatorTaskRunResult): FailureEffectClass {
   if (summary.allowedArtifact > 0) return "ALLOWED_ARTIFACT";
   return "NONE";
 }
+function remediationFailure(result: OperatorTaskRunResult): "REMEDIATION_ELIGIBLE_FAILURE" | "NON_REMEDIABLE_FAILURE" | "NOT_A_FAILURE" {
+  if (result.decision === "ALLOW") return "NOT_A_FAILURE";
+  return result.reason === "TASK_SANDBOX_FAILED" ? "REMEDIATION_ELIGIBLE_FAILURE" : "NON_REMEDIABLE_FAILURE";
+}
+
 function validateRequest(request: OperatorTaskRunRequest): void {
   if (typeof request !== "object" || request === null || Array.isArray(request)) return deny();
   const keys = Reflect.ownKeys(request);
@@ -136,7 +141,7 @@ export class M12StabilityCoordinator {
       repositoryIdentity: facts.repositoryIdentity,
       transactionId: request.txId,
       baseHeadSha: facts.baseHeadSha,
-      failure: result.decision === "ALLOW" ? "NOT_A_FAILURE" : "REMEDIATION_ELIGIBLE_FAILURE",
+      failure: remediationFailure(result),
       fingerprint,
       invariant: facts.invariant,
       authority: facts.authority,

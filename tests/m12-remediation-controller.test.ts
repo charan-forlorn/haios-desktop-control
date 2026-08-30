@@ -211,6 +211,18 @@ describe("M12 bounded remediation controller transition matrix", () => {
     await expect(store.load("episode-001")).resolves.toMatchObject({ attempt: 1 });
   });
 
+  it("does not spend remediation budget or persist non-remediable failures", async () => {
+    const { controller, store } = await controllerFixture();
+    await expect(controller.record(observation({ failure: "NON_REMEDIABLE_FAILURE" }))).resolves.toEqual({
+      directive: "MANUAL_RECONCILIATION_REQUIRED", attempt: 1, replanUsed: false,
+    });
+    await expect(store.load("episode-001")).resolves.toBeUndefined();
+    await expect(controller.record(observation({ failure: "NON_REMEDIABLE_FAILURE" }))).resolves.toEqual({
+      directive: "MANUAL_RECONCILIATION_REQUIRED", attempt: 1, replanUsed: false,
+    });
+    await expect(store.load("episode-001")).resolves.toBeUndefined();
+  });
+
   it("persists every eligible unsafe or budget failure before returning its directive", async () => {
     const { controller, store } = await controllerFixture();
     await controller.record(observation());

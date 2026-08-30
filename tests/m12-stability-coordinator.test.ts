@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+﻿import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -20,7 +20,7 @@ const REPO = "C:\\Workspace\\haios-operator-canary\\.git";
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
 function metadata(overrides: Partial<OperatorTaskResultMetadata> = {}): OperatorTaskResultMetadata {
   return {
-    decision: "DENY", reason: "TASK_EXIT_NONZERO", exitCode: 1, sandboxReason: "PROCESS_EXIT_NONZERO", timedOut: false,
+    decision: "DENY", reason: "TASK_SANDBOX_FAILED", exitCode: 1, sandboxReason: "PROCESS_EXIT_NONZERO", timedOut: false,
     taskId: "project_test", registryId: "registry", registryVersion: "1", registrySha256: "b".repeat(64),
     effectPolicySetId: "effects", effectPolicyVersion: "1", effectPolicyId: "effect", effectPolicySha256: "c".repeat(64),
     sandboxProfile: "S0", toolchainProfile: "node", image: "image", imageId: "image-id", transactionId: "txn_0123456789abcdef0123456789abcdef",
@@ -85,6 +85,18 @@ describe("M12 stability coordinator", () => {
       directive: "RETRY_SAME_PLAN", attempt: 1, replanUsed: false, recovery: "SAFE_TO_CONTINUE",
     });
     await expect(coordinator.observeTaskResult(request, denied())).resolves.toMatchObject({ directive: "REPLAN_REQUIRED", attempt: 2 });
+  });
+
+  it("never auto-remediates policy or currentness task denials", async () => {
+    for (const reason of ["TASK_REGISTRY_CURRENTNESS_MISMATCH", "TASK_CANONICAL_CURRENTNESS_DENIED", "TASK_EFFECT_POLICY_VIOLATION"] as const) {
+      const { coordinator } = await fixture();
+      await expect(coordinator.observeTaskResult(request, denied({ reason }))).resolves.toMatchObject({
+        directive: "MANUAL_RECONCILIATION_REQUIRED", attempt: 1, replanUsed: false,
+      });
+      await expect(coordinator.observeTaskResult(request, denied({ reason }))).resolves.toMatchObject({
+        directive: "MANUAL_RECONCILIATION_REQUIRED", attempt: 1, replanUsed: false,
+      });
+    }
   });
 
   it("routes protected effects to rollback instead of retry", async () => {

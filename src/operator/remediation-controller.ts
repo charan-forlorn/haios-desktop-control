@@ -31,7 +31,7 @@ export interface RemediationObservation {
   readonly repositoryIdentity: string;
   readonly transactionId: string;
   readonly baseHeadSha: string;
-  readonly failure: "REMEDIATION_ELIGIBLE_FAILURE" | "NOT_A_FAILURE";
+  readonly failure: "REMEDIATION_ELIGIBLE_FAILURE" | "NON_REMEDIABLE_FAILURE" | "NOT_A_FAILURE";
   readonly fingerprint: FailureFingerprint;
   readonly invariant: RemediationInvariant;
   readonly authority: "AUTHORIZED" | "DENIED" | "UNKNOWN";
@@ -154,7 +154,7 @@ function normalizeObservation(value: unknown): NormalizedObservation {
     repositoryIdentity: repositoryIdentity(fields.get("repositoryIdentity")),
     transactionId: identifier(fields.get("transactionId")),
     baseHeadSha: headSha(fields.get("baseHeadSha")),
-    failure: enumValue(fields.get("failure"), new Set(["REMEDIATION_ELIGIBLE_FAILURE", "NOT_A_FAILURE"] as const)),
+    failure: enumValue(fields.get("failure"), new Set(["REMEDIATION_ELIGIBLE_FAILURE", "NON_REMEDIABLE_FAILURE", "NOT_A_FAILURE"] as const)),
     fingerprint: Object.freeze({ coarse: sha(fingerprintFields.get("coarse")), fine: sha(fingerprintFields.get("fine")) }),
     invariant: Object.freeze({ name: invariantName, value: invariantValue }),
     authority: enumValue(fields.get("authority"), new Set(["AUTHORIZED", "DENIED", "UNKNOWN"] as const)),
@@ -195,6 +195,9 @@ export function decideRemediation(previousInput: RemediationEpisodeRecord | unde
   if (observation.failure === "NOT_A_FAILURE") return decision("PASS", currentAttempt, replanUsed);
   const safety = safetyDirective(observation);
   if (safety !== undefined) return decision(safety, currentAttempt, replanUsed);
+  if (observation.failure === "NON_REMEDIABLE_FAILURE") {
+    return decision("MANUAL_RECONCILIATION_REQUIRED", currentAttempt, replanUsed);
+  }
   if (previous?.attempt === 5) return decision("AUTONOMOUS_REMEDIATION_BUDGET_EXHAUSTED", 5, replanUsed);
 
   const attempt = previous === undefined ? 1 : previous.attempt + 1;
@@ -249,7 +252,7 @@ export class RemediationController {
       const observation = normalizeObservation(observationInput);
       const previous = await this.#store.load(observation.episodeId);
       const result = decideRemediation(previous, observationInput);
-      if (observation.failure === "NOT_A_FAILURE") return result;
+      if (observation.failure !== "REMEDIATION_ELIGIBLE_FAILURE") return result;
       await this.#store.save(eligibleFailureSnapshot(observation, result));
       return result;
     });
