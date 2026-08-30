@@ -88,7 +88,7 @@ function Assert-ExactFields($Object,[string[]]$Fields) {
 }
 function Read-JsonObject([string]$Path) {
   Assert-Current (Test-Path -LiteralPath $Path -PathType Leaf)
-  try { Get-Content -LiteralPath $Path -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop } catch { Fail-Current }
+  try { Get-Content -LiteralPath $Path -Raw -ErrorAction Stop | ConvertFrom-Json -DateKind String -ErrorAction Stop } catch { Fail-Current }
 }
 function Commit-StagedFile([string]$StagedPath,[string]$DestinationPath) {
   Assert-Current (Test-Path -LiteralPath $StagedPath -PathType Leaf)

@@ -83,6 +83,7 @@ describe("B6 staged activation helper boundaries", () => {
     for (const marker of ["$stagedEvidencePath", "[IO.File]::Replace", "[IO.File]::Move", "Assert-LiveEvidence $stagedEvidence"]) expect(preflight).toContain(marker);
     expect(preflight).toContain('[DateTimeOffset]::UtcNow.ToString("o")');
     expect(preflight).not.toContain('[DateTime]::UtcNow.ToString("o")');
+    expect(preflight).toContain('ConvertFrom-Json -DateKind String -ErrorAction Stop');
     expect(preflight).toContain('$DestinationPath.replace-backup-');
   });
   it("builds and independently reproduces every live B6 runtime from the current tracked candidate", async () => {
