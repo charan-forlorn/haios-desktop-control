@@ -89,7 +89,12 @@ describe("M12 sealed B5 activation transaction", () => {
     expect(restore).toBeGreaterThan(0);
     expect(cleanup).toBeGreaterThan(restore);
     expect(rollback).toContain("M12_ROLLBACK_M11_RESTORED");
-    expect(rollback).toContain("HAIOS_DESKTOP_CONTROL_PLANE_R1_M12_ROLLED_BACK_TO_CERTIFIED_M11_ACTIVE_STATE");
+    expect(rollback).toContain("HAIOS_DESKTOP_CONTROL_PLANE_R1_M12_ROLLED_BACK_TO_CERTIFIED_M11_ACTIVE_CANARY");
+  });
+
+  it("fails closed on dependency installation without network download authority", async () => {
+    const [, execute] = await sources();
+    expect(execute).toContain("npm.cmd ci --offline --ignore-scripts --no-audit --no-fund");
   });
 
   it("keeps exact authority boundaries and authenticated ACTIVE B5 host proof", async () => {
