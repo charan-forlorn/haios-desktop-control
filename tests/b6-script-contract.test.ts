@@ -120,6 +120,7 @@ describe("B6 staged activation helper boundaries", () => {
     const attestation = await readFile(join(process.cwd(), "scripts", "b6-runtime-attestation.mjs"), "utf8");
     for (const marker of ["runtime-exec", "compiledDigest", "lockExecutionRoot", "unlockExecutionRoot", "icacls", "executionRoot"]) expect(launcher).toContain(marker);
     expect(launcher).toContain("await cp(buildRoot, executionRoot");
+    expect(launcher).toContain('[executionRoot, "/reset", "/T", "/C"]');
     expect(launcher.indexOf("await lockExecutionRoot(executionRoot, executionSid)")).toBeLessThan(launcher.indexOf("await import(pathToFileURL(join(executionRoot"));
     expect(launcher.indexOf("await rm(preparedBuildRoot")).toBeLessThan(launcher.indexOf("await import(pathToFileURL(join(executionRoot"));
     expect(attestation).toContain("runtime-exec");

@@ -17,8 +17,8 @@ async function lockExecutionRoot(executionRoot, sid) {
   await run("icacls", [executionRoot, "/inheritance:r", "/grant:r", `*${sid}:(OI)(CI)RX`, "*S-1-5-18:(OI)(CI)F", "/T", "/C"],
     { encoding: "utf8", windowsHide: true, maxBuffer: 8 * 1024 * 1024 });
 }
-async function unlockExecutionRoot(executionRoot, sid) {
-  await run("icacls", [executionRoot, "/grant:r", `*${sid}:(OI)(CI)F`, "/T", "/C"],
+async function unlockExecutionRoot(executionRoot, _sid) {
+  await run("icacls", [executionRoot, "/reset", "/T", "/C"],
     { encoding: "utf8", windowsHide: true, maxBuffer: 8 * 1024 * 1024 });
 }
 const args = process.argv.slice(2);
