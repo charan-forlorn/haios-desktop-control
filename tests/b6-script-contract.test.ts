@@ -31,6 +31,22 @@ describe("B6 staged activation helper boundaries", () => {
     for (const marker of ["never manufactures PASS text", "preflight-b6-project-expansion.ps1", "B6_STAGE_ONE_CERTIFICATION_CURRENT", "B6_STAGE_TWO_PREFLIGHT_CURRENT"]) expect(source).toContain(marker);
     expect(source).not.toContain("WriteAllText($EvidencePath");
   });
+  it("requires authenticated Stage-1 proof before constructing Stage-2 runtime", async () => {
+    const runtime = await readFile(join(process.cwd(), "src", "operator", "b6-active-runtime.ts"), "utf8");
+    const launcher = await readFile(join(process.cwd(), "scripts", "run-b6-project-expansion-runtime.mjs"), "utf8");
+    const preflight = await readFile(join(process.cwd(), "scripts", "preflight-b6-project-expansion.ps1"), "utf8");
+    for (const marker of ["certificationHmacSha256", "liveQualificationEvidenceHmacSha256", "HMACSHA256", "operator-api-key"]) expect(preflight).toContain(marker);
+    for (const marker of ["verifyB6StageOneAdmission", "certificationHmacSha256", "liveQualificationEvidenceHmacSha256"]) expect(runtime).toContain(marker);
+    expect(launcher).toContain('config.stage === "HERMES_OS"');
+    expect(launcher).toContain("-ValidateOnly");
+    expect(launcher).toContain("stage1-final-certification.json");
+  });
+  it("rejects cross-volume or outside runtime build roots", async () => {
+    const launcher = await readFile(join(process.cwd(), "scripts", "run-b6-project-expansion-runtime.mjs"), "utf8");
+    const attestation = await readFile(join(process.cwd(), "scripts", "b6-runtime-attestation.mjs"), "utf8");
+    for (const source of [launcher, attestation]) expect(source).toContain("isAbsolute");
+    expect(attestation).toContain("realpath");
+  });
   it("starts the B6 gateway and authenticates/decodes the MCP host probe", async () => {
     const runtime = await readFile(join(process.cwd(), "scripts", "run-b6-project-expansion-runtime.mjs"), "utf8");
     const probe = await readFile(join(process.cwd(), "scripts", "probe-b6-project-expansion-host.mjs"), "utf8");
@@ -86,14 +102,14 @@ describe("B6 staged activation helper boundaries", () => {
     for (const marker of ["preflight-b6-project-expansion.ps1", "-ValidateOnly", "B6_STAGE_PREFLIGHT_NOT_CURRENT"]) expect(stageSeal).toContain(marker);
     const finalSeal = await readFile(join(process.cwd(), "scripts", "seal-b6-final.mjs"), "utf8");
     for (const marker of ["stage1-final-certification.json", "stage2-final-certification.json", "stage1-live-qualification.json", "stage2-live-qualification.json",
-      "liveQualificationEvidenceSha256", "effectPolicyVerified", "rollbackRecoveryClassification", "hermesOsDenied", "skillFabricRegression", "operatorCanaryRegression", "wrongRootDenied", "unknownProjectDenied", "B6_FINAL_ARTIFACT_PATH_DENIED"]) expect(finalSeal).toContain(marker);
+      "liveQualificationEvidenceSha256", "effectPolicyVerified", "rollbackRecoveryClassification", "hermesOsDenied", "skillFabricRegression", "operatorCanaryRegression", "wrongRootDenied", "unknownProjectDenied", "stageOneSealSha256", "stageTwoSealSha256", "B6_FINAL_ARTIFACT_PATH_DENIED"]) expect(finalSeal).toContain(marker);
   });
   it("implements live Stage-2 qualification and durable stage/final seal artifacts", async () => {
     const live = await readFile(join(process.cwd(), "scripts", "qualify-b6-live-stage.mjs"), "utf8");
     const qualify = await readFile(join(process.cwd(), "scripts", "qualify-b6-stage.ps1"), "utf8");
     const sealStage = await readFile(join(process.cwd(), "scripts", "seal-b6-stage.mjs"), "utf8");
     const sealFinal = await readFile(join(process.cwd(), "scripts", "seal-b6-final.mjs"), "utf8");
-    for (const marker of ["HERMES_OS", "stage2-live-qualification.json", "skillFabricRegression", "operatorCanaryRegression", "wrongRootDenied"]) expect(live).toContain(marker);
+    for (const marker of ["HERMES_OS", "stage2-live-qualification.json", "skillFabricRegression", "operatorCanaryRegression", "wrongRootDenied", "regressionCleanupTxIds", "for (const regressionTxId of regressionCleanupTxIds)"]) expect(live).toContain(marker);
     for (const marker of ["HAIOS_DESKTOP_CONTROL_PLANE_R1_B6_HERMES_OS_ADMISSION_QUALIFIED", "stage2-final-certification.json", "B6_STAGE_TWO_CERTIFICATION_CURRENT"]) expect(qualify).toContain(marker);
     for (const marker of ["stage1-evidence-bindings.json", "SHA256SUMS.stage1.txt", "stage1-final-seal.json", "stage1-final-certification.sha256", "stage2-final-seal.json"]) expect(sealStage).toContain(marker);
     for (const marker of ["HAIOS_DESKTOP_CONTROL_PLANE_R1_B6_PROJECT_EXPANSION_QUALIFIED", "b6-final-certification.json", "b6-final-seal.json", "SHA256SUMS.final.txt"]) expect(sealFinal).toContain(marker);

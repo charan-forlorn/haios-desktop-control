@@ -63,11 +63,18 @@ const apiKey = await loadHostApiKey(apiKeyFile);
 const client = new Client({ name: "b6-live-stage-qualifier", version: "2.0.0" });
 const call = async (name, args = {}) => payload(await client.callTool({ name, arguments: args }));
 let txId;
+const regressionCleanupTxIds = new Set();
 async function beginRollback(projectId) {
   const opened = await call("operator_begin_transaction", { projectId, canonicalRoot: roots[projectId] });
   if (opened.decision !== "ALLOW" || !opened.transaction?.txId) return false;
-  const rolled = await call("operator_rollback_transaction", { txId: opened.transaction.txId });
-  return rolled.decision === "ALLOW" && rolled.state === "ROLLED_BACK";
+  const regressionTxId = opened.transaction.txId;
+  regressionCleanupTxIds.add(regressionTxId);
+  try {
+    const rolled = await call("operator_rollback_transaction", { txId: regressionTxId });
+    const clean = rolled.decision === "ALLOW" && rolled.state === "ROLLED_BACK";
+    if (clean) regressionCleanupTxIds.delete(regressionTxId);
+    return clean;
+  } catch { return false; }
 }
 try {
   await client.connect(new StreamableHTTPClientTransport(new URL("http://127.0.0.1:8769/mcp"), { requestInit: { headers: { "X-API-Key": apiKey } } }));
@@ -129,6 +136,9 @@ try {
   process.stdout.write(`${JSON.stringify({ result: "PASS", evidencePath, stage })}\n`);
 } finally {
   if (txId) { try { await call("operator_rollback_transaction", { txId }); } catch {} }
+  for (const regressionTxId of regressionCleanupTxIds) {
+    try { await call("operator_rollback_transaction", { txId: regressionTxId }); } catch {}
+  }
   await client.close().catch(() => undefined);
   await rm(`${evidencePath}.tmp-${process.pid}`, { force: true }).catch(() => undefined);
 }

@@ -154,7 +154,9 @@ if (!verifyOnly) {
   const { sealSha256, ...sealUnsigned } = seal;
   if (seal.terminal !== finalTerminal || seal.finalCertificationSha256 !== sha(finalBytes)
     || seal.stageOneCertificationSha256 !== sha(stageOneBytes) || seal.stageOneEvidenceSha256 !== sha(stageOneEvidenceBytes)
+    || seal.stageOneSealSha256 !== sha(stageOneSealBytes)
     || seal.stageTwoCertificationSha256 !== sha(stageTwoBytes) || seal.stageTwoEvidenceSha256 !== sha(stageTwoEvidenceBytes)
+    || seal.stageTwoSealSha256 !== sha(stageTwoSealBytes)
     || seal.sha256SumsSha256 !== sha(sumsBytes) || sealSha256 !== sha(Buffer.from(stableJson(sealUnsigned), "utf8"))) {
     throw new Error("B6_FINAL_SEAL_REPRODUCTION_FAILED");
   }
