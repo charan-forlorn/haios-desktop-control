@@ -57,11 +57,13 @@ async function deterministicTrackedSourceManifest() {
   const text = `${rows.join("\n")}\n`;
   return Object.freeze({ sha256: digest(text), fileCount: files.length });
 }
-async function deterministicDirectoryDigest(root) {
+async function deterministicDirectoryDigest(root, excludedPrefixes = []) {
   const files = [];
   async function visit(dir) {
     for (const entry of await readdir(dir, { withFileTypes: true })) {
       const path = join(dir, entry.name);
+      const rel = relative(root, path).split(sep).join("/");
+      if (excludedPrefixes.some((prefix) => rel === prefix || rel.startsWith(`${prefix}/`))) continue;
       if (entry.isDirectory()) await visit(path);
       else if (entry.isFile()) files.push(path);
       else fail("M12_DISPOSABLE_COMPILED_OUTPUT_TYPE_DENIED");
@@ -94,7 +96,7 @@ async function prepareFreshRuntime() {
     copyFile(join(ROOT, "task-effects.m07.json"), join(distRoot, "task-effects.m07.json")),
     copyFile(join(ROOT, "scripts", "m12-disposable-b5-fixed-runner.mjs"), join(distRoot, "scripts", "m12-disposable-b5-fixed-runner.mjs")),
   ]);
-  const compiled = await deterministicDirectoryDigest(distRoot);
+  const compiled = await deterministicDirectoryDigest(distRoot, ["runtime"]);
   const [control, config, active, localGit, protocol] = await Promise.all([
     import(pathToFileURL(join(distRoot, "src", "operator", "control-runtime.js")).href),
     import(pathToFileURL(join(distRoot, "src", "operator", "m12-active-canary-config.js")).href),
@@ -117,7 +119,7 @@ async function assertRuntimeProvenanceStable(provenance) {
   await assertTrackedWorktreeClean();
   if (runtimeDistRoot === undefined) fail("M12_DISPOSABLE_RUNTIME_NOT_PREPARED");
   const [headSha, source, compiled] = await Promise.all([
-    git(["rev-parse", "HEAD"], ROOT), deterministicTrackedSourceManifest(), deterministicDirectoryDigest(runtimeDistRoot),
+    git(["rev-parse", "HEAD"], ROOT), deterministicTrackedSourceManifest(), deterministicDirectoryDigest(runtimeDistRoot, ["runtime"]),
   ]);
   if (headSha !== provenance.headSha || source.sha256 !== provenance.sourceManifestSha256
     || source.fileCount !== provenance.sourceFileCount || compiled.sha256 !== provenance.compiledOutputSha256
