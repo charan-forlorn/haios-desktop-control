@@ -41,6 +41,26 @@ describe("B6 staged activation helper boundaries", () => {
     }
     expect(probe).not.toContain('headers: { "content-type"');
   });
+  it("pins the certified target baselines instead of certifying arbitrary clean repositories", async () => {
+    const source = await readFile(join(process.cwd(), "scripts", "preflight-b6-project-expansion.ps1"), "utf8");
+    for (const marker of [
+      "51790d8fa098fa4b07b1424faee604dde9fa89fe", "47", "2aafb2c5f568ff49d4a1cc3b623cd36e0a49e7708e665ff78a48d3b1a084f340",
+      "94b43820e43060e4504f26e514d71d3024236871", "96", "cc4d70d2d61f18ea03d240808022cf4894269b8a2191752c270b2f2b1640c934",
+      "B6_CERTIFIED_BASELINE_NOT_CURRENT", "900",
+    ]) expect(source).toContain(marker);
+  });
+  it("mints Stage-1 evidence only from a fresh authenticated live transaction replay", async () => {
+    const preflight = await readFile(join(process.cwd(), "scripts", "preflight-b6-project-expansion.ps1"), "utf8");
+    const live = await readFile(join(process.cwd(), "scripts", "qualify-b6-live-stage.mjs"), "utf8");
+    expect(preflight).toContain("qualify-b6-live-stage.mjs");
+    expect(preflight.indexOf("qualify-b6-live-stage.mjs")).toBeLessThan(preflight.indexOf("$evidence=Read-JsonObject $EvidencePath"));
+    for (const marker of ["StreamableHTTPClientTransport", "X-API-Key", "operator_begin_transaction", "operator_stage_create", "operator_validate_transaction",
+      "operator_apply_transaction", "operator_run_task", "node.test.run", "operator_rollback_transaction", "stage1-live-qualification.json"]) expect(live).toContain(marker);
+  });
+  it("proves the connected server actually admits the stage target and rolls the probe transaction back", async () => {
+    const probe = await readFile(join(process.cwd(), "scripts", "probe-b6-project-expansion-host.mjs"), "utf8");
+    for (const marker of ["target_admitted", "operator_rollback_transaction", "hermes-os", "skill-fabric", "transaction.txId"]) expect(probe).toContain(marker);
+  });
   it("keeps live activation and rollback recovery-first and non-destructive in this source lane", async () => {
     const sources = await Promise.all(scripts.slice(2).map((name) => readFile(join(process.cwd(), "scripts", name), "utf8")));
     expect(sources.join("\n")).toContain("B6_LIVE_ACTIVATION_ORCHESTRATOR_REQUIRED");

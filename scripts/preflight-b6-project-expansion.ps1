@@ -9,6 +9,10 @@ param(
 $ErrorActionPreference = "Stop"
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $roots = @{ "operator-canary" = "C:\Workspace\haios-operator-canary"; "skill-fabric" = "C:\Workspace\haios-skill-fabric"; "hermes-os" = "C:\Workspace\hermes-ai-operating-system-b6-canonical" }
+$certifiedTargets = @{
+  "skill-fabric" = @{ head="51790d8fa098fa4b07b1424faee604dde9fa89fe"; trackedCount=47; manifestSha256="2aafb2c5f568ff49d4a1cc3b623cd36e0a49e7708e665ff78a48d3b1a084f340" }
+  "hermes-os" = @{ head="94b43820e43060e4504f26e514d71d3024236871"; trackedCount=96; manifestSha256="cc4d70d2d61f18ea03d240808022cf4894269b8a2191752c270b2f2b1640c934" }
+}
 $stage1Terminal = "HAIOS_DESKTOP_CONTROL_PLANE_R1_B6_SKILL_FABRIC_ADMISSION_QUALIFIED"
 $evidenceRoot = Join-Path $env:LOCALAPPDATA "HAIOS\B6\evidence\stage1"
 $expectedEvidencePath = Join-Path $evidenceRoot "stage1-live-qualification.json"
@@ -55,6 +59,12 @@ function Get-RepositoryFacts([string]$Root) {
   if($LASTEXITCODE -ne 0){ throw "B6_CANONICAL_STATUS_REQUIRED" }
   [pscustomobject]@{canonicalPath=$canonicalPath;gitCommonDirIdentity=$commonDir;head=$head;trackedCount=$paths.Count;manifestSha256=$manifestSha256;clean=[string]::IsNullOrWhiteSpace($status)}
 }
+function Assert-CertifiedTarget([string]$ProjectId,$Facts) {
+  $expected=$certifiedTargets[$ProjectId]
+  if($null -eq $expected -or $Facts.head -cne $expected.head -or [int]$Facts.trackedCount -ne [int]$expected.trackedCount -or $Facts.manifestSha256 -cne $expected.manifestSha256 -or $Facts.clean -ne $true){
+    throw "B6_CERTIFIED_BASELINE_NOT_CURRENT_$ProjectId"
+  }
+}
 function Assert-ExactFields($Object,[string[]]$Fields) {
   $actual=@($Object.PSObject.Properties.Name | Sort-Object -CaseSensitive); $expected=@($Fields | Sort-Object -CaseSensitive)
   Assert-Current ($actual.Count -eq $expected.Count)
@@ -83,7 +93,9 @@ function Assert-StageOneCertificateCurrent([string]$Path,$CandidateFacts,$SkillF
   Assert-Current ($certificate.liveQualificationResult -ceq "PASS" -and $certificate.exact13Tools -eq $true -and $certificate.projectAdmitted -eq $true -and $certificate.hermesOsDenied -eq $true)
   Assert-Current ($certificate.canonicalPreHeadSha -ceq $SkillFacts.head -and $certificate.canonicalPostHeadSha -ceq $SkillFacts.head -and $certificate.canonicalPreStatusClean -eq $true -and $certificate.canonicalPostStatusClean -eq $true -and [int]$certificate.ownedResidueCount -eq 0)
   Assert-Current ($certificate.effectPolicyVerified -eq $true -and $certificate.networkAuthority -ceq "NONE" -and $certificate.rollbackRecoveryClassification -ceq "SAFE_TO_ROLLBACK")
-  try { [void][DateTimeOffset]::ParseExact([string]$certificate.createdAt,"o",[Globalization.CultureInfo]::InvariantCulture,[Globalization.DateTimeStyles]::AssumeUniversal) } catch { Fail-Current }
+  try { $created=[DateTimeOffset]::ParseExact([string]$certificate.createdAt,"o",[Globalization.CultureInfo]::InvariantCulture,[Globalization.DateTimeStyles]::AssumeUniversal) } catch { Fail-Current }
+  $ageSeconds=([DateTimeOffset]::UtcNow-$created.ToUniversalTime()).TotalSeconds
+  Assert-Current ($ageSeconds -ge -60 -and $ageSeconds -le 900)
   $unsigned=[ordered]@{}; foreach($field in $certificateFields){if($field -cne "certificationSha256"){$unsigned[$field]=$certificate.$field}}
   Assert-Current ($certificate.certificationSha256 -cmatch "^[a-f0-9]{64}$" -and $certificate.certificationSha256 -ceq (Get-CanonicalSha256 $unsigned))
   Assert-Current (Same-Path ([string]$certificate.liveQualificationEvidencePath) $expectedEvidencePath)
@@ -94,10 +106,13 @@ function Assert-StageOneCertificateCurrent([string]$Path,$CandidateFacts,$SkillF
 if($CandidateManifestSha256 -notmatch "^[a-f0-9]{64}$"){ throw "B6_CANDIDATE_MANIFEST_INVALID" }
 $candidateFacts=Get-RepositoryFacts $RepoRoot; Assert-Current ($candidateFacts.clean -eq $true)
 if($CandidateManifestSha256 -cne $candidateFacts.manifestSha256){ throw "B6_CANDIDATE_MANIFEST_NOT_CURRENT" }
-$skillFacts=Get-RepositoryFacts $roots["skill-fabric"]; if(-not $skillFacts.clean){ throw "B6_CANONICAL_CLEAN_REQUIRED_skill-fabric" }
+$skillFacts=Get-RepositoryFacts $roots["skill-fabric"]; if(-not $skillFacts.clean){ throw "B6_CANONICAL_CLEAN_REQUIRED_skill-fabric" }; Assert-CertifiedTarget "skill-fabric" $skillFacts
 if($Stage -eq "SKILL_FABRIC"){
   if([string]::IsNullOrWhiteSpace($EvidencePath) -or [string]::IsNullOrWhiteSpace($CertificationPath)){ throw "B6_STAGE_ONE_CERTIFICATION_REQUIRED" }
   Assert-Current (Same-Path $EvidencePath $expectedEvidencePath); Assert-Current (Same-Path $CertificationPath $expectedCertificationPath)
+  if(Test-Path -LiteralPath $EvidencePath -PathType Leaf){ Remove-Item -LiteralPath $EvidencePath -Force }
+  & node.exe (Join-Path $PSScriptRoot "qualify-b6-live-stage.mjs") "SKILL_FABRIC" $CandidateManifestSha256 $EvidencePath | Out-Null
+  if($LASTEXITCODE -ne 0 -or -not(Test-Path -LiteralPath $EvidencePath -PathType Leaf)){ throw "B6_STAGE_ONE_LIVE_QUALIFICATION_FAILED" }
   $evidence=Read-JsonObject $EvidencePath; Assert-LiveEvidence $evidence $candidateFacts $skillFacts
   $unsigned=[ordered]@{
     schema="HAIOS_B6_STAGE_CERTIFICATION_R1"; stage="SKILL_FABRIC"; terminal=$stage1Terminal; targetProjectId="skill-fabric"
@@ -114,6 +129,9 @@ if($Stage -eq "SKILL_FABRIC"){
   if([string]::IsNullOrWhiteSpace($StageOneCertificationPath) -or -not(Test-Path -LiteralPath $StageOneCertificationPath -PathType Leaf)){ throw "B6_STAGE_ONE_CERTIFICATION_REQUIRED" }
   Assert-Current (Same-Path $StageOneCertificationPath $expectedCertificationPath)
   Assert-StageOneCertificateCurrent $StageOneCertificationPath $candidateFacts $skillFacts
+  $hermesFacts=Get-RepositoryFacts $roots["hermes-os"]; Assert-CertifiedTarget "hermes-os" $hermesFacts
+  & node.exe (Join-Path $PSScriptRoot "probe-b6-project-expansion-host.mjs") "SKILL_FABRIC" | Out-Null
+  if($LASTEXITCODE -ne 0){ throw "B6_STAGE_ONE_LIVE_RUNTIME_NOT_CURRENT" }
 }
 $admitted=if($Stage -eq "SKILL_FABRIC"){@("operator-canary","skill-fabric")}else{@("operator-canary","skill-fabric","hermes-os")}
 foreach($id in $admitted){

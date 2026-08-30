@@ -20,6 +20,7 @@ const client = new Client({ name: "b6-project-expansion-host-probe", version: "1
 const payload = (result) => JSON.parse(result.content.filter((item) => item.type === "text").map((item) => item.text ?? "").join("\n"));
 const call = async (name, args = {}) => payload(await client.callTool({ name, arguments: args }));
 const exactTools = (tools) => tools.length === OPERATOR_V1_TOOL_NAMES.length && tools.every((name, index) => name === OPERATOR_V1_TOOL_NAMES[index]);
+let probeTxId;
 try {
   await client.connect(new StreamableHTTPClientTransport(new URL("http://127.0.0.1:8769/mcp"), { requestInit: { headers: { "X-API-Key": apiKey } } }));
   const listed = await client.listTools();
@@ -31,16 +32,28 @@ try {
     const hermesDenied = await call("operator_begin_transaction", { projectId: "hermes-os", canonicalRoot: "C:\\Workspace\\hermes-ai-operating-system-b6-canonical" });
     hermesOsDenied = hermesDenied.decision === "DENY" && hermesDenied.reason === "PROJECT_NOT_ALLOWED";
   }
+  const target = expectedStage === "SKILL_FABRIC"
+    ? { projectId: "skill-fabric", canonicalRoot: "C:\\Workspace\\haios-skill-fabric" }
+    : { projectId: "hermes-os", canonicalRoot: "C:\\Workspace\\hermes-ai-operating-system-b6-canonical" };
+  const targetBegin = await call("operator_begin_transaction", target);
+  const targetAdmitted = targetBegin.decision === "ALLOW" && typeof targetBegin.transaction?.txId === "string";
+  if (targetAdmitted) probeTxId = targetBegin.transaction.txId;
+  const targetRollback = targetAdmitted ? await call("operator_rollback_transaction", { txId: probeTxId }) : null;
+  if (targetRollback?.decision === "ALLOW" && targetRollback.state === "ROLLED_BACK") probeTxId = undefined;
   const result = {
     exact_13_tools: exactTools(listed.tools.map((tool) => tool.name)), mode: status.mode, protocol: status.protocol,
     mutation_active: status.mutationActive, s2_enabled: caps.s2Enabled, generic_exec: caps.genericExec, generic_shell: caps.genericShell,
     destructive: status.destructive, stage: expectedStage, activation_scope: config.activationScope,
     unknown_project_denied: denied.decision === "DENY" && denied.reason === "PROJECT_NOT_ALLOWED", hermes_os_denied: hermesOsDenied,
+    target_admitted: targetAdmitted, target_rollback: targetRollback?.decision === "ALLOW" && targetRollback.state === "ROLLED_BACK",
   };
   if (!result.exact_13_tools || result.mode !== "ACTIVE" || result.protocol !== "operator13" || result.mutation_active !== true
     || result.s2_enabled !== false || result.generic_exec !== false || result.generic_shell !== false || result.destructive !== "LOCKED"
-    || !result.unknown_project_denied || !result.hermes_os_denied) throw new Error("B6_HOST_CAPABILITY_DRIFT");
+    || !result.unknown_project_denied || !result.hermes_os_denied || !result.target_admitted || !result.target_rollback) {
+    throw new Error("B6_HOST_CAPABILITY_DRIFT");
+  }
   process.stdout.write(`${JSON.stringify(result)}\n`);
 } finally {
+  if (probeTxId) await call("operator_rollback_transaction", { txId: probeTxId }).catch(() => undefined);
   await client.close().catch(() => undefined);
 }
