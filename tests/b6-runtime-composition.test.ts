@@ -1,12 +1,36 @@
-import { win32 } from "node:path";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, win32 } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import * as core from "../src/operator/m12-active-canary-operator-core.js";
+import { createB6ActiveRuntime } from "../src/operator/b6-active-runtime.js";
 
 describe("B6 final-B5 composition boundary", () => {
   it("exposes only the B6 server-owned composition seam", () => {
     expect(Object.hasOwn(core, "createFinalB5OperatorRuntime")).toBe(false);
     expect(Object.hasOwn(core, "createB6FinalB5OperatorRuntime")).toBe(true);
+  });
+
+  it("denies direct Hermes runtime construction without authenticated Stage-1 proof", async () => {
+    const previous = process.env.LOCALAPPDATA;
+    const root = await mkdtemp(join(tmpdir(), "b6-stage1-auth-"));
+    try {
+      process.env.LOCALAPPDATA = root;
+      const keyDir = join(root, "HAIOS", "M10");
+      await mkdir(keyDir, { recursive: true });
+      await writeFile(join(keyDir, "operator-api-key"), "0123456789abcdef0123456789abcdef\n", "utf8");
+      const stateRoot = win32.join(root, "HAIOS", "B6");
+      await expect(createB6ActiveRuntime({
+        apiKeyFile: win32.join(root, "HAIOS", "M10", "operator-api-key"), stateRoot, worktreeRoot: win32.join(stateRoot, "worktrees"),
+        port: 8769, mode: "ACTIVE", activationScope: "B6_HERMES_OS_ADMISSION", stage: "HERMES_OS",
+        allowedProjects: { "operator-canary": "C:\\Workspace\\haios-operator-canary", "skill-fabric": "C:\\Workspace\\haios-skill-fabric",
+          "hermes-os": "C:\\Workspace\\hermes-ai-operating-system-b6-canonical" },
+      })).rejects.toThrow("B6_STAGE_ONE_AUTHENTICATED_PROOF_REQUIRED");
+    } finally {
+      if (previous === undefined) delete process.env.LOCALAPPDATA; else process.env.LOCALAPPDATA = previous;
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it("denies caller-selected state paths and project maps before composition", async () => {

@@ -1,3 +1,7 @@
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
+
 import { createGatewayServer, type GatewayRuntime } from "../server.js";
 import type { DesktopCommanderReadClient } from "../upstream.js";
 
@@ -33,6 +37,51 @@ function noAuthorityUpstream(): DesktopCommanderReadClient {
 }
 function projectIds(config: B6RuntimeConfig): readonly string[] { return Object.freeze(Object.keys(config.allowedProjects).sort()); }
 
+function stableJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`).join(",")}}`;
+}
+function hexEqual(left: unknown, right: string): boolean {
+  if (typeof left !== "string" || !/^[a-f0-9]{64}$/u.test(left) || !/^[a-f0-9]{64}$/u.test(right)) return false;
+  return timingSafeEqual(Buffer.from(left, "hex"), Buffer.from(right, "hex"));
+}
+function hmacHex(apiKey: string, bytes: Buffer): string { return createHmac("sha256", Buffer.from(apiKey, "utf8")).update(bytes).digest("hex"); }
+function shaHex(bytes: Buffer): string { return createHash("sha256").update(bytes).digest("hex"); }
+async function verifyB6StageOneAdmission(apiKey: string): Promise<void> {
+  const localAppData = process.env.LOCALAPPDATA;
+  if (!localAppData) throw new Error("B6_STAGE_ONE_AUTHENTICATED_PROOF_REQUIRED");
+  const root = resolve(localAppData, "HAIOS", "B6", "evidence", "stage1");
+  const certificationPath = resolve(root, "stage1-final-certification.json");
+  const evidencePath = resolve(root, "stage1-live-qualification.json");
+  let certBytes: Buffer; let evidenceBytes: Buffer;
+  try { [certBytes, evidenceBytes] = await Promise.all([readFile(certificationPath), readFile(evidencePath)]); }
+  catch { throw new Error("B6_STAGE_ONE_AUTHENTICATED_PROOF_REQUIRED"); }
+  let cert: Record<string, unknown>; let evidence: Record<string, unknown>;
+  try { cert = JSON.parse(certBytes.toString("utf8")); evidence = JSON.parse(evidenceBytes.toString("utf8")); }
+  catch { throw new Error("B6_STAGE_ONE_AUTHENTICATED_PROOF_REQUIRED"); }
+  const certificationHmacSha256 = cert.certificationHmacSha256;
+  const certificationSha256 = cert.certificationSha256;
+  const authUnsigned = { ...cert }; delete authUnsigned.certificationHmacSha256;
+  const hashUnsigned = { ...authUnsigned }; delete hashUnsigned.certificationSha256;
+  if (!hexEqual(certificationHmacSha256, hmacHex(apiKey, Buffer.from(stableJson(authUnsigned), "utf8")))
+    || !hexEqual(certificationSha256, shaHex(Buffer.from(stableJson(hashUnsigned), "utf8")))
+    || !hexEqual(cert.liveQualificationEvidenceSha256, shaHex(evidenceBytes))
+    || !hexEqual(cert.liveQualificationEvidenceHmacSha256, hmacHex(apiKey, evidenceBytes))) {
+    throw new Error("B6_STAGE_ONE_AUTHENTICATED_PROOF_REQUIRED");
+  }
+  const createdAt = typeof cert.createdAt === "string" ? Date.parse(cert.createdAt) : Number.NaN;
+  const ageMs = Date.now() - createdAt;
+  if (cert.schema !== "HAIOS_B6_STAGE_CERTIFICATION_R1" || cert.stage !== "SKILL_FABRIC"
+    || cert.terminal !== "HAIOS_DESKTOP_CONTROL_PLANE_R1_B6_SKILL_FABRIC_ADMISSION_QUALIFIED"
+    || cert.targetProjectId !== "skill-fabric" || cert.targetHeadSha !== "51790d8fa098fa4b07b1424faee604dde9fa89fe"
+    || cert.targetManifestSha256 !== "2aafb2c5f568ff49d4a1cc3b623cd36e0a49e7708e665ff78a48d3b1a084f340"
+    || cert.liveQualificationEvidencePath !== evidencePath || cert.liveQualificationResult !== "PASS"
+    || evidence.schema !== "HAIOS_B6_STAGE1_LIVE_QUALIFICATION_R1" || evidence.result !== "PASS" || evidence.hermesOsDenied !== true
+    || !Number.isFinite(createdAt) || ageMs < -60_000 || ageMs > 900_000) throw new Error("B6_STAGE_ONE_AUTHENTICATED_PROOF_REQUIRED");
+}
+
 export function createB6ReadinessMetadata(value: unknown): B6ReadinessMetadata {
   const config = validateB6RuntimeConfig(value);
   return Object.freeze({ host: "127.0.0.1", port: B6_PRODUCTION_PORT, mode: "ACTIVE", protocolMode: "operator13",
@@ -53,6 +102,7 @@ export async function createB6ActiveRuntime(value: unknown): Promise<GatewayRunt
   let apiKey: string;
   try { apiKey = await loadHostApiKey(config.apiKeyFile); }
   catch { throw new Error("B6_API_KEY_FILE_INVALID"); }
+  if (config.stage === "HERMES_OS") await verifyB6StageOneAdmission(apiKey);
   return createGatewayServer({ apiKey, upstream: noAuthorityUpstream(), protocolMode: "operator13", operatorMode: "ACTIVE",
     operatorRuntime: await createB6OperatorRuntime(config), host: "127.0.0.1", port: B6_PRODUCTION_PORT });
 }

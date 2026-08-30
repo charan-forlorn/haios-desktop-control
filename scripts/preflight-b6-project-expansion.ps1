@@ -22,10 +22,11 @@ $expectedCertificationPath = Join-Path $evidenceRoot "stage1-final-certification
 $stage2EvidenceRoot = Join-Path $env:LOCALAPPDATA "HAIOS\B6\evidence\stage2"
 $expectedStage2EvidencePath = Join-Path $stage2EvidenceRoot "stage2-live-qualification.json"
 $expectedStage2CertificationPath = Join-Path $stage2EvidenceRoot "stage2-final-certification.json"
-$certificateFields = @("schema","stage","terminal","targetProjectId","b6CandidateHeadSha","b6CandidateTrackedCount","b6CandidateManifestSha256","canonicalPath","gitCommonDirIdentity","targetHeadSha","targetTrackedCount","targetManifestSha256","liveQualificationEvidencePath","liveQualificationEvidenceSha256","liveQualificationResult","exact13Tools","projectAdmitted","hermesOsDenied","canonicalPreHeadSha","canonicalPostHeadSha","canonicalPreStatusClean","canonicalPostStatusClean","ownedResidueCount","effectPolicyVerified","networkAuthority","rollbackRecoveryClassification","createdAt","certificationSha256")
+$operatorKeyPath = Join-Path $env:LOCALAPPDATA "HAIOS\M10\operator-api-key"
+$certificateFields = @("schema","stage","terminal","targetProjectId","b6CandidateHeadSha","b6CandidateTrackedCount","b6CandidateManifestSha256","canonicalPath","gitCommonDirIdentity","targetHeadSha","targetTrackedCount","targetManifestSha256","liveQualificationEvidencePath","liveQualificationEvidenceSha256","liveQualificationResult","exact13Tools","projectAdmitted","hermesOsDenied","canonicalPreHeadSha","canonicalPostHeadSha","canonicalPreStatusClean","canonicalPostStatusClean","ownedResidueCount","effectPolicyVerified","networkAuthority","rollbackRecoveryClassification","createdAt","liveQualificationEvidenceHmacSha256","certificationSha256","certificationHmacSha256")
 $evidenceFields = @("schema","stage","targetProjectId","result","b6CandidateHeadSha","b6CandidateManifestSha256","skillFabricHeadSha","skillFabricManifestSha256","exact13Tools","projectAdmitted","hermesOsDenied","canonicalPreHeadSha","canonicalPostHeadSha","canonicalPreStatusClean","canonicalPostStatusClean","ownedResidueCount","effectPolicyVerified","networkAuthority","rollbackRecoveryClassification")
 $stage2EvidenceFields = @("schema","stage","targetProjectId","result","b6CandidateHeadSha","b6CandidateManifestSha256","stageOneCertificationSha256","skillFabricHeadSha","skillFabricManifestSha256","hermesOsHeadSha","hermesOsManifestSha256","exact13Tools","projectAdmitted","skillFabricRegression","operatorCanaryRegression","wrongRootDenied","unknownProjectDenied","canonicalPreHeadSha","canonicalPostHeadSha","canonicalPreStatusClean","canonicalPostStatusClean","ownedResidueCount","effectPolicyVerified","networkAuthority","rollbackRecoveryClassification")
-$stage2CertificateFields = @("schema","stage","terminal","targetProjectId","b6CandidateHeadSha","b6CandidateTrackedCount","b6CandidateManifestSha256","canonicalPath","gitCommonDirIdentity","targetHeadSha","targetTrackedCount","targetManifestSha256","stageOneCertificationPath","stageOneCertificationSha256","liveQualificationEvidencePath","liveQualificationEvidenceSha256","liveQualificationResult","exact13Tools","projectAdmitted","skillFabricRegression","operatorCanaryRegression","wrongRootDenied","canonicalPreHeadSha","canonicalPostHeadSha","canonicalPreStatusClean","canonicalPostStatusClean","ownedResidueCount","effectPolicyVerified","networkAuthority","rollbackRecoveryClassification","createdAt","certificationSha256")
+$stage2CertificateFields = @("schema","stage","terminal","targetProjectId","b6CandidateHeadSha","b6CandidateTrackedCount","b6CandidateManifestSha256","canonicalPath","gitCommonDirIdentity","targetHeadSha","targetTrackedCount","targetManifestSha256","stageOneCertificationPath","stageOneCertificationSha256","liveQualificationEvidencePath","liveQualificationEvidenceSha256","liveQualificationResult","exact13Tools","projectAdmitted","skillFabricRegression","operatorCanaryRegression","wrongRootDenied","canonicalPreHeadSha","canonicalPostHeadSha","canonicalPreStatusClean","canonicalPostStatusClean","ownedResidueCount","effectPolicyVerified","networkAuthority","rollbackRecoveryClassification","createdAt","liveQualificationEvidenceHmacSha256","certificationSha256","certificationHmacSha256")
 function Fail-Current { throw "B6_STAGE_ONE_CERTIFICATION_NOT_CURRENT" }
 function Assert-Current([bool]$Condition) { if(-not $Condition){ Fail-Current } }
 function Get-Sha256([string]$Path) { (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant() }
@@ -46,6 +47,14 @@ function ConvertTo-CanonicalJson($Value) {
   "{" + (($names | ForEach-Object { "$($_ | ConvertTo-Json -Compress):$(ConvertTo-CanonicalJson $Value.$_)" }) -join ",") + "}"
 }
 function Get-CanonicalSha256($Value) { Get-BytesSha256 ([Text.Encoding]::UTF8.GetBytes((ConvertTo-CanonicalJson $Value))) }
+function Get-OperatorHmac([byte[]]$Bytes) {
+  Assert-Current (Test-Path -LiteralPath $operatorKeyPath -PathType Leaf)
+  $keyText=[IO.File]::ReadAllText($operatorKeyPath,[Text.Encoding]::UTF8).Trim()
+  Assert-Current ($keyText.Length -ge 16 -and $keyText.Length -le 512)
+  $hmac=[Security.Cryptography.HMACSHA256]::new([Text.Encoding]::UTF8.GetBytes($keyText))
+  try { ([BitConverter]::ToString($hmac.ComputeHash($Bytes))).Replace("-","").ToLowerInvariant() } finally { $hmac.Dispose() }
+}
+function Get-CanonicalHmac($Value) { Get-OperatorHmac ([Text.Encoding]::UTF8.GetBytes((ConvertTo-CanonicalJson $Value))) }
 function Get-RepositoryFacts([string]$Root) {
   $canonicalPath=Resolve-CanonicalPath $Root
   $head=(@(& git.exe -C $canonicalPath rev-parse --verify HEAD 2>$null) -join "`n").Trim()
@@ -121,11 +130,14 @@ function Assert-StageOneCertificateCurrent([string]$Path,$CandidateFacts,$SkillF
   try { $created=[DateTimeOffset]::ParseExact([string]$certificate.createdAt,"o",[Globalization.CultureInfo]::InvariantCulture,[Globalization.DateTimeStyles]::AssumeUniversal) } catch { Fail-Current }
   $ageSeconds=([DateTimeOffset]::UtcNow-$created.ToUniversalTime()).TotalSeconds
   Assert-Current ($ageSeconds -ge -60 -and $ageSeconds -le 900)
-  $unsigned=[ordered]@{}; foreach($field in $certificateFields){if($field -cne "certificationSha256"){$unsigned[$field]=$certificate.$field}}
+  $unsigned=[ordered]@{}; foreach($field in $certificateFields){if($field -cne "certificationSha256" -and $field -cne "certificationHmacSha256"){$unsigned[$field]=$certificate.$field}}
   Assert-Current ($certificate.certificationSha256 -cmatch "^[a-f0-9]{64}$" -and $certificate.certificationSha256 -ceq (Get-CanonicalSha256 $unsigned))
+  $authenticated=[ordered]@{}; foreach($field in $certificateFields){if($field -cne "certificationHmacSha256"){$authenticated[$field]=$certificate.$field}}
+  Assert-Current ($certificate.certificationHmacSha256 -cmatch "^[a-f0-9]{64}$" -and $certificate.certificationHmacSha256 -ceq (Get-CanonicalHmac $authenticated))
   Assert-Current (Same-Path ([string]$certificate.liveQualificationEvidencePath) $expectedEvidencePath)
   Assert-Current (Test-Path -LiteralPath $expectedEvidencePath -PathType Leaf)
   Assert-Current ($certificate.liveQualificationEvidenceSha256 -ceq (Get-Sha256 $expectedEvidencePath))
+  Assert-Current ($certificate.liveQualificationEvidenceHmacSha256 -cmatch "^[a-f0-9]{64}$" -and $certificate.liveQualificationEvidenceHmacSha256 -ceq (Get-OperatorHmac ([IO.File]::ReadAllBytes($expectedEvidencePath))))
   $evidence=Read-JsonObject $expectedEvidencePath; Assert-LiveEvidence $evidence $CandidateFacts $SkillFacts
 }
 function Assert-StageTwoCertificateCurrent([string]$Path,$CandidateFacts,$SkillFacts,$HermesFacts,[string]$StageOnePath) {
@@ -144,8 +156,11 @@ function Assert-StageTwoCertificateCurrent([string]$Path,$CandidateFacts,$SkillF
   Assert-Current ($certificate.effectPolicyVerified -eq $true -and $certificate.networkAuthority -ceq "NONE" -and $certificate.rollbackRecoveryClassification -ceq "SAFE_TO_ROLLBACK")
   try { $created=[DateTimeOffset]::ParseExact([string]$certificate.createdAt,"o",[Globalization.CultureInfo]::InvariantCulture,[Globalization.DateTimeStyles]::AssumeUniversal) } catch { Fail-Current }
   $ageSeconds=([DateTimeOffset]::UtcNow-$created.ToUniversalTime()).TotalSeconds; Assert-Current ($ageSeconds -ge -60 -and $ageSeconds -le 900)
-  $unsigned=[ordered]@{}; foreach($field in $stage2CertificateFields){if($field -cne "certificationSha256"){$unsigned[$field]=$certificate.$field}}
+  $unsigned=[ordered]@{}; foreach($field in $stage2CertificateFields){if($field -cne "certificationSha256" -and $field -cne "certificationHmacSha256"){$unsigned[$field]=$certificate.$field}}
   Assert-Current ($certificate.certificationSha256 -cmatch "^[a-f0-9]{64}$" -and $certificate.certificationSha256 -ceq (Get-CanonicalSha256 $unsigned))
+  $authenticated=[ordered]@{}; foreach($field in $stage2CertificateFields){if($field -cne "certificationHmacSha256"){$authenticated[$field]=$certificate.$field}}
+  Assert-Current ($certificate.certificationHmacSha256 -cmatch "^[a-f0-9]{64}$" -and $certificate.certificationHmacSha256 -ceq (Get-CanonicalHmac $authenticated))
+  Assert-Current ($certificate.liveQualificationEvidenceHmacSha256 -cmatch "^[a-f0-9]{64}$" -and $certificate.liveQualificationEvidenceHmacSha256 -ceq (Get-OperatorHmac ([IO.File]::ReadAllBytes($expectedStage2EvidencePath))))
   $evidence=Read-JsonObject $expectedStage2EvidencePath; Assert-StageTwoLiveEvidence $evidence $CandidateFacts $SkillFacts $HermesFacts $certificate.stageOneCertificationSha256
 }
 if($CandidateManifestSha256 -notmatch "^[a-f0-9]{64}$"){ throw "B6_CANDIDATE_MANIFEST_INVALID" }
@@ -168,11 +183,15 @@ if($Stage -eq "SKILL_FABRIC"){
       schema="HAIOS_B6_STAGE_CERTIFICATION_R1"; stage="SKILL_FABRIC"; terminal=$stage1Terminal; targetProjectId="skill-fabric"
       b6CandidateHeadSha=$candidateFacts.head; b6CandidateTrackedCount=$candidateFacts.trackedCount; b6CandidateManifestSha256=$candidateFacts.manifestSha256
       canonicalPath=$skillFacts.canonicalPath; gitCommonDirIdentity=$skillFacts.gitCommonDirIdentity; targetHeadSha=$skillFacts.head; targetTrackedCount=$skillFacts.trackedCount; targetManifestSha256=$skillFacts.manifestSha256
-      liveQualificationEvidencePath=[IO.Path]::GetFullPath($expectedEvidencePath); liveQualificationEvidenceSha256=(Get-Sha256 $expectedEvidencePath); liveQualificationResult="PASS"
+      liveQualificationEvidencePath=[IO.Path]::GetFullPath($expectedEvidencePath); liveQualificationEvidenceSha256=(Get-Sha256 $expectedEvidencePath); liveQualificationEvidenceHmacSha256=(Get-OperatorHmac ([IO.File]::ReadAllBytes($expectedEvidencePath))); liveQualificationResult="PASS"
       exact13Tools=$true; projectAdmitted=$true; hermesOsDenied=$true; canonicalPreHeadSha=$skillFacts.head; canonicalPostHeadSha=$skillFacts.head
       canonicalPreStatusClean=$true; canonicalPostStatusClean=$true; ownedResidueCount=0; effectPolicyVerified=$true; networkAuthority="NONE"; rollbackRecoveryClassification="SAFE_TO_ROLLBACK"; createdAt=[DateTimeOffset]::UtcNow.ToString("o")
     }
-    $certificate=[ordered]@{}; foreach($field in $certificateFields){if($field -ceq "certificationSha256"){$certificate[$field]=Get-CanonicalSha256 $unsigned}else{$certificate[$field]=$unsigned[$field]}}
+    $certificate=[ordered]@{}; foreach($field in $certificateFields){
+      if($field -ceq "certificationSha256"){$certificate[$field]=Get-CanonicalSha256 $unsigned}
+      elseif($field -ceq "certificationHmacSha256"){$certificate[$field]=Get-CanonicalHmac $certificate}
+      else{$certificate[$field]=$unsigned[$field]}
+    }
     [IO.File]::WriteAllText($stagedCertificationPath,((ConvertTo-CanonicalJson $certificate)+"`n"),[Text.UTF8Encoding]::new($false))
     Commit-StagedFile $stagedCertificationPath $expectedCertificationPath
     Assert-StageOneCertificateCurrent $expectedCertificationPath $candidateFacts $skillFacts
@@ -212,12 +231,16 @@ if($Stage -eq "SKILL_FABRIC"){
         b6CandidateHeadSha=$candidateFacts.head; b6CandidateTrackedCount=$candidateFacts.trackedCount; b6CandidateManifestSha256=$candidateFacts.manifestSha256
         canonicalPath=$hermesFacts.canonicalPath; gitCommonDirIdentity=$hermesFacts.gitCommonDirIdentity; targetHeadSha=$hermesFacts.head; targetTrackedCount=$hermesFacts.trackedCount; targetManifestSha256=$hermesFacts.manifestSha256
         stageOneCertificationPath=[IO.Path]::GetFullPath($StageOneCertificationPath); stageOneCertificationSha256=$stageOneFileSha
-        liveQualificationEvidencePath=[IO.Path]::GetFullPath($expectedStage2EvidencePath); liveQualificationEvidenceSha256=(Get-Sha256 $expectedStage2EvidencePath); liveQualificationResult="PASS"
+        liveQualificationEvidencePath=[IO.Path]::GetFullPath($expectedStage2EvidencePath); liveQualificationEvidenceSha256=(Get-Sha256 $expectedStage2EvidencePath); liveQualificationEvidenceHmacSha256=(Get-OperatorHmac ([IO.File]::ReadAllBytes($expectedStage2EvidencePath))); liveQualificationResult="PASS"
         exact13Tools=$true; projectAdmitted=$true; skillFabricRegression=$true; operatorCanaryRegression=$true; wrongRootDenied=$true
         canonicalPreHeadSha=$hermesFacts.head; canonicalPostHeadSha=$hermesFacts.head; canonicalPreStatusClean=$true; canonicalPostStatusClean=$true; ownedResidueCount=0
         effectPolicyVerified=$true; networkAuthority="NONE"; rollbackRecoveryClassification="SAFE_TO_ROLLBACK"; createdAt=[DateTimeOffset]::UtcNow.ToString("o")
       }
-      $certificate=[ordered]@{}; foreach($field in $stage2CertificateFields){if($field -ceq "certificationSha256"){$certificate[$field]=Get-CanonicalSha256 $unsigned}else{$certificate[$field]=$unsigned[$field]}}
+      $certificate=[ordered]@{}; foreach($field in $stage2CertificateFields){
+        if($field -ceq "certificationSha256"){$certificate[$field]=Get-CanonicalSha256 $unsigned}
+        elseif($field -ceq "certificationHmacSha256"){$certificate[$field]=Get-CanonicalHmac $certificate}
+        else{$certificate[$field]=$unsigned[$field]}
+      }
       [IO.File]::WriteAllText($stagedCertificationPath,((ConvertTo-CanonicalJson $certificate)+"`n"),[Text.UTF8Encoding]::new($false))
       Commit-StagedFile $stagedCertificationPath $expectedStage2CertificationPath
       Assert-StageTwoCertificateCurrent $expectedStage2CertificationPath $candidateFacts $skillFacts $hermesFacts $StageOneCertificationPath

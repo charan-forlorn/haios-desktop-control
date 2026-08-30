@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
-import { readFile, readdir, rm } from "node:fs/promises";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { readFile, readdir, realpath, rm } from "node:fs/promises";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 
@@ -47,9 +47,10 @@ async function independentlyRebuildCurrentRuntime(current) {
     || !Number.isSafeInteger(verifier.compiledFileCount) || !/^[a-f0-9]{64}$/u.test(verifier.compiledOutputSha256 ?? "")) {
     throw new Error("B6_RUNTIME_BUILD_REPRODUCTION_FAILED");
   }
-  const verifierBuildRoot = resolve(verifier.buildRoot);
-  const verifierRel = relative(runtimeRoot, verifierBuildRoot);
-  if (verifierRel === "" || verifierRel === ".." || verifierRel.startsWith(`..${sep}`)) throw new Error("B6_RUNTIME_BUILD_REPRODUCTION_FAILED");
+  const runtimeReal = await realpath(runtimeRoot);
+  const verifierBuildRoot = await realpath(resolve(verifier.buildRoot));
+  const verifierRel = relative(runtimeReal, verifierBuildRoot);
+  if (verifierRel === "" || isAbsolute(verifierRel) || verifierRel === ".." || verifierRel.startsWith(`..${sep}`)) throw new Error("B6_RUNTIME_BUILD_REPRODUCTION_FAILED");
   const reproduced = await compiledDigest(verifierBuildRoot);
   if (reproduced.compiledFileCount !== verifier.compiledFileCount || reproduced.compiledOutputSha256 !== verifier.compiledOutputSha256) {
     throw new Error("B6_RUNTIME_BUILD_REPRODUCTION_FAILED");
@@ -70,9 +71,10 @@ export async function loadCurrentB6RuntimeBinding(expectedStage) {
     || attestationSha256 !== sha256(Buffer.from(stableJson(unsigned), "utf8"))) throw new Error("B6_RUNTIME_BUILD_ATTESTATION_INVALID");
   const expectedScope = expectedStage === "SKILL_FABRIC" ? "B6_SKILL_FABRIC_ADMISSION" : "B6_HERMES_OS_ADMISSION";
   if (attestation.activationScope !== expectedScope) throw new Error("B6_RUNTIME_BUILD_ATTESTATION_INVALID");
-  const buildRoot = resolve(attestation.buildRoot);
-  const rel = relative(runtimeRoot, buildRoot);
-  if (rel === "" || rel === ".." || rel.startsWith(`..${sep}`)) throw new Error("B6_RUNTIME_BUILD_ROOT_DENIED");
+  const runtimeReal = await realpath(runtimeRoot);
+  const buildRoot = await realpath(resolve(attestation.buildRoot));
+  const rel = relative(runtimeReal, buildRoot);
+  if (rel === "" || isAbsolute(rel) || rel === ".." || rel.startsWith(`..${sep}`)) throw new Error("B6_RUNTIME_BUILD_ROOT_DENIED");
   const current = await currentCandidateFacts();
   if (!current.clean || attestation.candidateHeadSha !== current.candidateHeadSha || attestation.candidateTrackedCount !== current.candidateTrackedCount
     || attestation.candidateManifestSha256 !== current.candidateManifestSha256) throw new Error("B6_RUNTIME_BUILD_SOURCE_NOT_CURRENT");

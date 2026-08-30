@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
-import { readFile, rename, rm, writeFile } from "node:fs/promises";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 
@@ -16,10 +16,12 @@ if (build?.schema !== "HAIOS_B6_RUNTIME_BUILD_R1" || !/^[a-f0-9]{64}$/u.test(bui
   || !/^[a-f0-9]{64}$/u.test(build.compiledOutputSha256 ?? "") || !Number.isSafeInteger(build.compiledFileCount)) {
   throw new Error("B6_RUNTIME_BUILD_ATTESTATION_INVALID");
 }
-const buildRoot = resolve(build.buildRoot);
+let buildRoot = resolve(build.buildRoot);
 const runtimeRoot = resolve(repoRoot, "runtime");
-const buildRel = relative(runtimeRoot, buildRoot);
-if (buildRel === "" || buildRel === ".." || buildRel.startsWith(`..${sep}`) || buildRel.startsWith(`..${sep}`) || !buildRoot.startsWith(runtimeRoot)) {
+const runtimeReal = await realpath(runtimeRoot);
+buildRoot = await realpath(buildRoot);
+const buildRel = relative(runtimeReal, buildRoot);
+if (buildRel === "" || isAbsolute(buildRel) || buildRel === ".." || buildRel.startsWith(`..${sep}`)) {
   throw new Error("B6_RUNTIME_BUILD_ROOT_DENIED");
 }
 const buildMetadata = JSON.parse(await readFile(join(buildRoot, "b6-runtime-build.json"), "utf8"));
@@ -27,13 +29,24 @@ if (buildMetadata.candidateHeadSha !== build.candidateHeadSha || buildMetadata.c
   || buildMetadata.compiledOutputSha256 !== build.compiledOutputSha256 || buildMetadata.compiledFileCount !== build.compiledFileCount) {
   throw new Error("B6_RUNTIME_BUILD_METADATA_DRIFT");
 }
-const runtimeModule = await import(pathToFileURL(join(buildRoot, "src", "operator", "b6-active-runtime.js")).href);
 const config = JSON.parse(await readFile(args[0], "utf8"));
+const localAppData = process.env.LOCALAPPDATA;
+if (!localAppData) throw new Error("B6_RUNTIME_LOCALAPPDATA_REQUIRED");
+if (config.stage === "HERMES_OS") {
+  const preflightPath = join(repoRoot, "scripts", "preflight-b6-project-expansion.ps1");
+  const stageOneRoot = resolve(localAppData, "HAIOS", "B6", "evidence", "stage1");
+  try {
+    await run("pwsh", ["-NoProfile", "-File", preflightPath, "-Stage", "SKILL_FABRIC",
+      "-CandidateManifestSha256", build.candidateManifestSha256,
+      "-EvidencePath", resolve(stageOneRoot, "stage1-live-qualification.json"),
+      "-CertificationPath", resolve(stageOneRoot, "stage1-final-certification.json"), "-ValidateOnly"],
+      { cwd: repoRoot, encoding: "utf8", windowsHide: true, maxBuffer: 4 * 1024 * 1024 });
+  } catch { throw new Error("B6_STAGE_ONE_AUTHENTICATED_PROOF_REQUIRED"); }
+}
+const runtimeModule = await import(pathToFileURL(join(buildRoot, "src", "operator", "b6-active-runtime.js")).href);
 const started = await runtimeModule.createB6ActiveRuntime(config);
 await started.listen();
 const readiness = runtimeModule.createB6ReadinessMetadata(config);
-const localAppData = process.env.LOCALAPPDATA;
-if (!localAppData) throw new Error("B6_RUNTIME_LOCALAPPDATA_REQUIRED");
 const attestationPath = resolve(localAppData, "HAIOS", "B6", "runtime-build-attestation.json");
 const stableJson = (value) => {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
