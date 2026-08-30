@@ -148,6 +148,18 @@ async function independentlyRebuildCurrentRuntime(current) {
   }
   return Object.freeze({ ...verifier, buildRoot: verifierBuildRoot });
 }
+export async function resolvePrivateExecutionRoot(localAppData, candidateRoot) {
+  if (typeof localAppData !== "string" || localAppData.length === 0 || typeof candidateRoot !== "string" || candidateRoot.length === 0) {
+    throw new Error("B6_RUNTIME_EXECUTION_ROOT_DENIED");
+  }
+  const executionParent = resolve(localAppData, "HAIOS", "B6", "runtime-exec");
+  const executionReal = await realpath(executionParent);
+  const buildRoot = await realpath(resolve(candidateRoot));
+  const rel = relative(executionReal, buildRoot);
+  if (rel === "" || isAbsolute(rel) || rel === ".." || rel.startsWith(`..${sep}`)) throw new Error("B6_RUNTIME_EXECUTION_ROOT_DENIED");
+  return buildRoot;
+}
+
 export async function loadCurrentB6RuntimeBinding(expectedStage) {
   if (expectedStage !== "SKILL_FABRIC" && expectedStage !== "HERMES_OS") throw new Error("B6_RUNTIME_BINDING_STAGE_REQUIRED");
   const localAppData = process.env.LOCALAPPDATA;
@@ -164,11 +176,7 @@ export async function loadCurrentB6RuntimeBinding(expectedStage) {
     || attestationSha256 !== sha256(Buffer.from(stableJson(unsigned), "utf8"))) throw new Error("B6_RUNTIME_BUILD_ATTESTATION_INVALID");
   const expectedScope = expectedStage === "SKILL_FABRIC" ? "B6_SKILL_FABRIC_ADMISSION" : "B6_HERMES_OS_ADMISSION";
   if (attestation.activationScope !== expectedScope) throw new Error("B6_RUNTIME_BUILD_ATTESTATION_INVALID");
-  const executionParent = resolve(localAppData, "HAIOS", "B6", "runtime-exec");
-  const executionReal = await realpath(executionParent);
-  const buildRoot = await realpath(resolve(attestation.buildRoot));
-  const rel = relative(executionReal, buildRoot);
-  if (rel === "" || isAbsolute(rel) || rel === ".." || rel.startsWith(`..${sep}`)) throw new Error("B6_RUNTIME_EXECUTION_ROOT_DENIED");
+  const buildRoot = await resolvePrivateExecutionRoot(localAppData, attestation.buildRoot);
   const current = await currentCandidateFacts();
   if (!current.clean || attestation.candidateHeadSha !== current.candidateHeadSha || attestation.candidateTrackedCount !== current.candidateTrackedCount
     || attestation.candidateManifestSha256 !== current.candidateManifestSha256) throw new Error("B6_RUNTIME_BUILD_SOURCE_NOT_CURRENT");
