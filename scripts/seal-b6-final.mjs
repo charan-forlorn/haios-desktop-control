@@ -38,7 +38,7 @@ async function repositoryFacts(root) {
 }
 function validateCertification(bytes, stage, terminal) {
   const value = JSON.parse(bytes.toString("utf8"));
-  const { certificationSha256, ...unsigned } = value;
+  const { certificationSha256, certificationHmacSha256: _certificationHmacSha256, ...unsigned } = value;
   if (value.stage !== stage || value.terminal !== terminal || value.liveQualificationResult !== "PASS"
     || certificationSha256 !== sha(Buffer.from(stableJson(unsigned), "utf8"))) throw new Error("B6_FINAL_STAGE_CERTIFICATION_INVALID");
   return value;

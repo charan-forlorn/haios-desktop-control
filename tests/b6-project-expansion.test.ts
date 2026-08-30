@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -7,7 +8,6 @@ import {
   B6_STAGE_ONE_TERMINAL,
   qualifyB6StageCertification,
   resolveB6Project,
-  sealB6StageOneCertification,
   validateB6StageOneCertification,
   validateB6RuntimeConfig,
 } from "../src/operator/b6-project-expansion.js";
@@ -16,8 +16,14 @@ import { OPERATOR_V1_TOOL_NAMES } from "../src/operator/protocol.js";
 
 const LOCAL_APP_DATA = process.env.LOCALAPPDATA ?? "C:\\Users\\fixture\\AppData\\Local";
 
+function stableJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`).join(",")}}`;
+}
 function stageOneCertificate() {
-  return sealB6StageOneCertification({
+  const unsigned = {
     schema: "HAIOS_B6_STAGE_CERTIFICATION_R1", stage: "SKILL_FABRIC", terminal: B6_STAGE_ONE_TERMINAL, targetProjectId: "skill-fabric",
     b6CandidateHeadSha: "a".repeat(40), b6CandidateTrackedCount: 12, b6CandidateManifestSha256: "b".repeat(64),
     canonicalPath: B6_SKILL_FABRIC_ROOT, gitCommonDirIdentity: "C:\\Workspace\\haios-skill-fabric\\.git",
@@ -25,8 +31,10 @@ function stageOneCertificate() {
     liveQualificationEvidencePath: "C:\\evidence\\live.json", liveQualificationEvidenceSha256: "e".repeat(64),
     liveQualificationResult: "PASS", exact13Tools: true, projectAdmitted: true, hermesOsDenied: true,
     canonicalPreHeadSha: "c".repeat(40), canonicalPostHeadSha: "c".repeat(40), canonicalPreStatusClean: true, canonicalPostStatusClean: true,
-    ownedResidueCount: 0, effectPolicyVerified: true, networkAuthority: "NONE", rollbackRecoveryClassification: "SAFE_TO_ROLLBACK", createdAt: "2026-08-30T00:00:00.0000000Z",
-  });
+    ownedResidueCount: 0, effectPolicyVerified: true, networkAuthority: "NONE", rollbackRecoveryClassification: "SAFE_TO_ROLLBACK",
+    createdAt: "2026-08-30T00:00:00.0000000+00:00", liveQualificationEvidenceHmacSha256: "1".repeat(64),
+  } as const;
+  return { ...unsigned, certificationSha256: createHash("sha256").update(stableJson(unsigned), "utf8").digest("hex"), certificationHmacSha256: "2".repeat(64) };
 }
 function config(stage: "SKILL_FABRIC" | "HERMES_OS") {
   return {

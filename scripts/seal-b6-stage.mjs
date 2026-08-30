@@ -41,7 +41,7 @@ if (stage === "HERMES_OS") preflightArgs.push("-StageOneCertificationPath", reso
 try { execFileSync("pwsh", preflightArgs, { cwd: repoRoot, stdio: "pipe", windowsHide: true }); }
 catch { throw new Error("B6_STAGE_PREFLIGHT_NOT_CURRENT"); }
 const certDigest = cert.certificationSha256;
-const { certificationSha256, ...unsigned } = cert;
+const { certificationSha256, certificationHmacSha256: _certificationHmacSha256, ...unsigned } = cert;
 if (!/^[a-f0-9]{64}$/u.test(certDigest ?? "") || certDigest !== sha(Buffer.from(stableJson(unsigned), "utf8"))) throw new Error("B6_STAGE_CERTIFICATION_HASH_INVALID");
 if (cert.stage !== stage || cert.terminal !== terminal || cert.liveQualificationResult !== "PASS" || evidence.stage !== stage || evidence.result !== "PASS") throw new Error("B6_STAGE_SEAL_TERMINAL_INVALID");
 if (resolve(cert.liveQualificationEvidencePath) !== evidencePath || cert.liveQualificationEvidenceSha256 !== sha(evidenceBytes)) throw new Error("B6_STAGE_EVIDENCE_BINDING_INVALID");

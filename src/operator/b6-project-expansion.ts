@@ -59,7 +59,9 @@ export interface B6StageCertification {
   readonly networkAuthority: "NONE";
   readonly rollbackRecoveryClassification: "SAFE_TO_ROLLBACK";
   readonly createdAt: string;
+  readonly liveQualificationEvidenceHmacSha256: string;
   readonly certificationSha256: string;
+  readonly certificationHmacSha256: string;
 }
 export interface B6StageQualificationInput {
   readonly stage: B6Stage;
@@ -67,7 +69,7 @@ export interface B6StageQualificationInput {
   readonly candidateManifestSha256: string;
   readonly stageOneCertification?: B6StageCertification;
 }
-type UnsignedStageOneCertification = Omit<B6StageCertification, "certificationSha256">;
+type UnsignedStageOneCertification = Omit<B6StageCertification, "certificationSha256" | "certificationHmacSha256">;
 
 function deny(code = "B6_RUNTIME_CONFIG_DENIED"): never { throw new Error(code); }
 function plain(value: unknown): Record<string, unknown> {
@@ -122,12 +124,11 @@ const CERT_FIELDS = Object.freeze([
   "schema","stage","terminal","targetProjectId","b6CandidateHeadSha","b6CandidateTrackedCount","b6CandidateManifestSha256","canonicalPath","gitCommonDirIdentity",
   "targetHeadSha","targetTrackedCount","targetManifestSha256","liveQualificationEvidencePath","liveQualificationEvidenceSha256","liveQualificationResult","exact13Tools",
   "projectAdmitted","hermesOsDenied","canonicalPreHeadSha","canonicalPostHeadSha","canonicalPreStatusClean","canonicalPostStatusClean","ownedResidueCount","effectPolicyVerified",
-  "networkAuthority","rollbackRecoveryClassification","createdAt","certificationSha256",
+  "networkAuthority","rollbackRecoveryClassification","createdAt","liveQualificationEvidenceHmacSha256","certificationSha256","certificationHmacSha256",
 ] as const);
-export function sealB6StageOneCertification(input: UnsignedStageOneCertification): B6StageCertification {
-  const record = plain(input) as unknown as UnsignedStageOneCertification;
-  if (Object.keys(record as unknown as Record<string, unknown>).length !== CERT_FIELDS.length - 1) deny("B6_STAGE_ONE_CERTIFICATION_REQUIRED");
-  return validateB6StageOneCertification({ ...record, certificationSha256: sha(record) });
+export function sealB6StageOneCertification(_input: UnsignedStageOneCertification): B6StageCertification {
+  // Authenticated certification is minted only by the live PowerShell preflight using the protected operator key.
+  return deny("B6_STAGE_ONE_CERTIFICATION_AUTHENTICATOR_REQUIRED");
 }
 export function validateB6StageOneCertification(value: unknown, candidateManifestSha256?: string): B6StageCertification {
   let data: Record<string, unknown>;
@@ -139,7 +140,7 @@ export function validateB6StageOneCertification(value: unknown, candidateManifes
     || data.exact13Tools !== true || data.projectAdmitted !== true || data.hermesOsDenied !== true || data.canonicalPreStatusClean !== true
     || data.canonicalPostStatusClean !== true || data.ownedResidueCount !== 0 || data.effectPolicyVerified !== true || data.networkAuthority !== "NONE"
     || data.rollbackRecoveryClassification !== "SAFE_TO_ROLLBACK") deny("B6_STAGE_ONE_CERTIFICATION_REQUIRED");
-  for (const field of ["b6CandidateManifestSha256","targetManifestSha256","liveQualificationEvidenceSha256","certificationSha256"] as const) {
+  for (const field of ["b6CandidateManifestSha256","targetManifestSha256","liveQualificationEvidenceSha256","liveQualificationEvidenceHmacSha256","certificationSha256","certificationHmacSha256"] as const) {
     if (typeof data[field] !== "string" || !SHA256.test(data[field] as string)) deny("B6_STAGE_ONE_CERTIFICATION_REQUIRED");
   }
   for (const field of ["b6CandidateHeadSha","targetHeadSha","canonicalPreHeadSha","canonicalPostHeadSha"] as const) {
@@ -152,7 +153,7 @@ export function validateB6StageOneCertification(value: unknown, candidateManifes
     || typeof data.liveQualificationEvidencePath !== "string" || !win32.isAbsolute(data.liveQualificationEvidencePath)
     || typeof data.createdAt !== "string" || !Number.isFinite(Date.parse(data.createdAt))) deny("B6_STAGE_ONE_CERTIFICATION_REQUIRED");
   if (candidateManifestSha256 !== undefined && data.b6CandidateManifestSha256 !== candidateManifestSha256) deny("B6_STAGE_ONE_CERTIFICATION_REQUIRED");
-  const { certificationSha256, ...unsigned } = data;
+  const { certificationSha256, certificationHmacSha256: _certificationHmacSha256, ...unsigned } = data;
   if (certificationSha256 !== sha(unsigned)) deny("B6_STAGE_ONE_CERTIFICATION_REQUIRED");
   return Object.freeze(data as unknown as B6StageCertification);
 }
