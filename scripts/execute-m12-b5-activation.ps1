@@ -36,7 +36,7 @@ if([IO.Path]::GetFullPath([string]$Envelope.m11_final_cert_path) -ne $M11FinalCe
 if([string]$Envelope.m11_certified_head -ne $M11CertifiedHead -or [string]$Envelope.m11_certified_manifest_sha256 -ne $M11CertifiedManifest){AuthorityFail "M11_CERTIFIED_IDENTITY_MISMATCH"}
 if([string]$Envelope.canary_root -ne $CanaryRoot -or [string]$Envelope.canary_branch -ne $ExpectedCanaryBranch){AuthorityFail "CANARY_IDENTITY_MISMATCH"}
 if([string]$Envelope.m11_task_name -ne $M11Task -or [string]$Envelope.m12_task_name -ne $M12Task){AuthorityFail "TASK_IDENTITY_MISMATCH"}
-if([bool]$Envelope.tunnel_mutation_authorized -or [bool]$Envelope.m10_api_key_rotation_authorized -or [bool]$Envelope.s2_authorized -or [bool]$Envelope.destructive_authorized -or [bool]$Envelope.generic_exec_authorized -or [bool]$Envelope.generic_shell_authorized){AuthorityFail "FORBIDDEN_AUTHORITY_PRESENT"}
+foreach($field in @("tunnel_mutation_authorized","m10_api_key_rotation_authorized","s2_authorized","destructive_authorized","generic_exec_authorized","generic_shell_authorized")){$property=$Envelope.PSObject.Properties[$field];if($null -eq $property -or $property.Value -isnot [bool] -or $property.Value -ne $false){AuthorityFail "FORBIDDEN_AUTHORITY_FIELD_INVALID:$field"}}
 if(-not(Test-Path -LiteralPath $M11FinalCertification)){AuthorityFail "M11_FINAL_CERT_MISSING"}
 if((Get-Sha256 $M11FinalCertification) -ne [string]$Envelope.m11_final_cert_sha256){AuthorityFail "M11_FINAL_CERT_DRIFT"}
 $cert=Get-Content -Raw -LiteralPath $M11FinalCertification|ConvertFrom-Json

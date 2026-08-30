@@ -97,6 +97,29 @@ describe("M12 sealed B5 activation transaction", () => {
     expect(execute).toContain("npm.cmd ci --offline --ignore-scripts --no-audit --no-fund");
   });
 
+  it("requires every forbidden-authority envelope field to be present and exact false", async () => {
+    const [, execute] = await sources();
+    for (const field of ["tunnel_mutation_authorized", "m10_api_key_rotation_authorized", "s2_authorized", "destructive_authorized", "generic_exec_authorized", "generic_shell_authorized"]) {
+      expect(execute).toContain(`\"${field}\"`);
+    }
+    expect(execute).toContain("$Envelope.PSObject.Properties[$field]");
+    expect(execute).toContain("-isnot [bool]");
+    expect(execute).toContain("-ne $false");
+    expect(execute).toContain("FORBIDDEN_AUTHORITY_FIELD_INVALID");
+  });
+
+  it("re-proves exact certified M11 runtime bytes before rollback starts M11", async () => {
+    const [, , rollback] = await sources();
+    const start = rollback.indexOf("Start-ScheduledTask -TaskName $M11Task");
+    expect(start).toBeGreaterThan(0);
+    for (const marker of ["M11_FINAL_CERT_NOT_CURRENT", "M11_RUNTIME_HEAD_DRIFT", "M11_RUNTIME_DIRTY", "M11_RUNTIME_MANIFEST_DRIFT"]) {
+      const index = rollback.indexOf(marker);
+      expect(index).toBeGreaterThan(0);
+      expect(index).toBeLessThan(start);
+    }
+    expect(rollback).toContain("Get-ManifestDigest $M11RuntimeRoot");
+  });
+
   it("keeps exact authority boundaries and authenticated ACTIVE B5 host proof", async () => {
     const [preflight, execute, rollback, probe] = await sources();
     const all = [preflight, execute, rollback, probe].join("\n").toLowerCase();
