@@ -31,6 +31,16 @@ describe("B6 staged activation helper boundaries", () => {
     for (const marker of ["never manufactures PASS text", "preflight-b6-project-expansion.ps1", "B6_STAGE_ONE_CERTIFICATION_CURRENT", "B6_STAGE_TWO_PREFLIGHT_CURRENT"]) expect(source).toContain(marker);
     expect(source).not.toContain("WriteAllText($EvidencePath");
   });
+  it("starts the B6 gateway and authenticates/decodes the MCP host probe", async () => {
+    const runtime = await readFile(join(process.cwd(), "scripts", "run-b6-project-expansion-runtime.mjs"), "utf8");
+    const probe = await readFile(join(process.cwd(), "scripts", "probe-b6-project-expansion-host.mjs"), "utf8");
+    expect(runtime.indexOf("await started.listen()")) .toBeGreaterThan(-1);
+    expect(runtime.indexOf("await started.listen()")).toBeLessThan(runtime.indexOf("process.stdout.write"));
+    for (const expected of ["StreamableHTTPClientTransport", "loadHostApiKey", "X-API-Key", "result.content", "mutationActive", "s2Enabled", "genericExec", "genericShell", "PROJECT_NOT_ALLOWED", "hermes_os_denied"]) {
+      expect(probe).toContain(expected);
+    }
+    expect(probe).not.toContain('headers: { "content-type"');
+  });
   it("keeps live activation and rollback recovery-first and non-destructive in this source lane", async () => {
     const sources = await Promise.all(scripts.slice(2).map((name) => readFile(join(process.cwd(), "scripts", name), "utf8")));
     expect(sources.join("\n")).toContain("B6_LIVE_ACTIVATION_ORCHESTRATOR_REQUIRED");
