@@ -4,7 +4,8 @@ import { cp, mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from "n
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
-import { compiledDigest, copyCurrentProductionDependencies, productionDependencyFacts, verifyPreparedB6RuntimeBuild } from "./b6-runtime-attestation.mjs";
+import { compiledDigest, productionDependencyFacts, verifyPreparedB6RuntimeBuild } from "./b6-runtime-attestation.mjs";
+import { copyLockedProductionDependencies } from "./b6-lockfile-dependencies.mjs";
 
 const run = promisify(execFile);
 async function currentUserSid() {
@@ -28,7 +29,9 @@ const preparePath = join(repoRoot, "scripts", "prepare-b6-runtime-build.mjs");
 const preparedProcess = await run(process.execPath, [preparePath], { cwd: repoRoot, encoding: "utf8", windowsHide: true, maxBuffer: 16 * 1024 * 1024 });
 const prepared = JSON.parse(preparedProcess.stdout.trim().split(/\r?\n/u).at(-1));
 if (prepared?.schema !== "HAIOS_B6_RUNTIME_BUILD_R1" || !/^[a-f0-9]{64}$/u.test(prepared.candidateManifestSha256 ?? "")
-  || !/^[a-f0-9]{64}$/u.test(prepared.compiledOutputSha256 ?? "") || !Number.isSafeInteger(prepared.compiledFileCount)) {
+  || !/^[a-f0-9]{64}$/u.test(prepared.compiledOutputSha256 ?? "") || !/^[a-f0-9]{64}$/u.test(prepared.toolchainSha256 ?? "")
+  || !Number.isSafeInteger(prepared.compiledFileCount) || !Number.isSafeInteger(prepared.toolchainPackageRootCount)
+  || !Number.isSafeInteger(prepared.toolchainFileCount)) {
   throw new Error("B6_RUNTIME_BUILD_ATTESTATION_INVALID");
 }
 let buildRoot = resolve(prepared.buildRoot);
@@ -44,7 +47,9 @@ let executionRoot; let executionSid; let started; let attestationPath; let tempA
 try {
   const buildMetadata = JSON.parse(await readFile(join(buildRoot, "b6-runtime-build.json"), "utf8"));
 if (buildMetadata.candidateHeadSha !== prepared.candidateHeadSha || buildMetadata.candidateManifestSha256 !== prepared.candidateManifestSha256
-  || buildMetadata.compiledOutputSha256 !== prepared.compiledOutputSha256 || buildMetadata.compiledFileCount !== prepared.compiledFileCount) {
+  || buildMetadata.compiledOutputSha256 !== prepared.compiledOutputSha256 || buildMetadata.compiledFileCount !== prepared.compiledFileCount
+  || buildMetadata.toolchainPackageRootCount !== prepared.toolchainPackageRootCount || buildMetadata.toolchainFileCount !== prepared.toolchainFileCount
+  || buildMetadata.toolchainSha256 !== prepared.toolchainSha256) {
   throw new Error("B6_RUNTIME_BUILD_METADATA_DRIFT");
 }
 const config = JSON.parse(await readFile(args[0], "utf8"));
@@ -66,7 +71,7 @@ const executionParent = resolve(localAppData, "HAIOS", "B6", "runtime-exec");
 await mkdir(executionParent, { recursive: true });
 executionRoot = await mkdtemp(join(executionParent, "b6-exec-"));
 await cp(buildRoot, executionRoot, { recursive: true, force: false, errorOnExist: false });
-const dependencyFacts = await copyCurrentProductionDependencies(executionRoot);
+const dependencyFacts = await copyLockedProductionDependencies(executionRoot);
 const executionMetadataPath = join(executionRoot, "b6-runtime-build.json");
 await writeFile(executionMetadataPath, `${JSON.stringify({ ...buildMetadata, buildRoot: executionRoot, ...dependencyFacts })}\n`, "utf8");
 executionSid = await currentUserSid();
@@ -77,6 +82,8 @@ const lockedDependencyFacts = await productionDependencyFacts(executionRoot);
 if (resolve(executionMetadata.buildRoot) !== executionRoot || executionMetadata.candidateHeadSha !== prepared.candidateHeadSha
   || executionMetadata.candidateManifestSha256 !== prepared.candidateManifestSha256
   || executionMetadata.compiledOutputSha256 !== prepared.compiledOutputSha256 || executionMetadata.compiledFileCount !== prepared.compiledFileCount
+  || executionMetadata.toolchainPackageRootCount !== prepared.toolchainPackageRootCount || executionMetadata.toolchainFileCount !== prepared.toolchainFileCount
+  || executionMetadata.toolchainSha256 !== prepared.toolchainSha256
   || executionMetadata.dependencyPackageRootCount !== dependencyFacts.dependencyPackageRootCount
   || executionMetadata.dependencyFileCount !== dependencyFacts.dependencyFileCount || executionMetadata.dependencySha256 !== dependencyFacts.dependencySha256
   || executionDigest.compiledFileCount !== prepared.compiledFileCount || executionDigest.compiledOutputSha256 !== prepared.compiledOutputSha256
@@ -100,7 +107,9 @@ const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 const unsignedAttestation = Object.freeze({ schema: "HAIOS_B6_RUNTIME_BUILD_ATTESTATION_R1", pid: process.pid,
   candidateHeadSha: prepared.candidateHeadSha, candidateTrackedCount: prepared.candidateTrackedCount,
   candidateManifestSha256: prepared.candidateManifestSha256, compiledFileCount: prepared.compiledFileCount,
-  compiledOutputSha256: prepared.compiledOutputSha256, dependencyPackageRootCount: dependencyFacts.dependencyPackageRootCount,
+  compiledOutputSha256: prepared.compiledOutputSha256, toolchainPackageRootCount: prepared.toolchainPackageRootCount,
+  toolchainFileCount: prepared.toolchainFileCount, toolchainSha256: prepared.toolchainSha256,
+  dependencyPackageRootCount: dependencyFacts.dependencyPackageRootCount,
   dependencyFileCount: dependencyFacts.dependencyFileCount, dependencySha256: dependencyFacts.dependencySha256,
   buildRoot, stage: readiness.stage,
   activationScope: readiness.activationScope, protocolMode: readiness.protocolMode, port: readiness.port });

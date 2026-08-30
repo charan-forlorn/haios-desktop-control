@@ -4,6 +4,7 @@ import { access, copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } fr
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { withLockedBuildToolchain } from "./b6-lockfile-dependencies.mjs";
 
 const run = promisify(execFile);
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -45,9 +46,14 @@ await mkdir(runtimeRoot, { recursive: true });
 const buildRoot = await mkdtemp(join(runtimeRoot, "b6-live-build-"));
 let complete = false;
 try {
-  const tscCli = join(repoRoot, "node_modules", "typescript", "bin", "tsc");
-  await access(tscCli);
-  await run(process.execPath, [tscCli, "--project", join(repoRoot, "tsconfig.json"), "--outDir", buildRoot], { cwd: repoRoot, windowsHide: true, maxBuffer: 16 * 1024 * 1024 });
+  let toolchainFacts;
+  await withLockedBuildToolchain(async (toolchainRoot, facts) => {
+    const tscCli = join(toolchainRoot, "node_modules", "typescript", "bin", "tsc");
+    await access(tscCli);
+    await run(process.execPath, [tscCli, "--project", join(repoRoot, "tsconfig.json"), "--outDir", buildRoot], { cwd: repoRoot, windowsHide: true, maxBuffer: 16 * 1024 * 1024 });
+    toolchainFacts = facts;
+  });
+  if (!toolchainFacts) throw new Error("B6_RUNTIME_TOOLCHAIN_ATTESTATION_REQUIRED");
   await Promise.all([
     copyFile(join(repoRoot, "task-registry.m07.json"), join(buildRoot, "task-registry.m07.json")),
     copyFile(join(repoRoot, "task-effects.m07.json"), join(buildRoot, "task-effects.m07.json")),
@@ -64,6 +70,9 @@ try {
     candidateManifestSha256: before.candidateManifestSha256,
     compiledFileCount: compiled.compiledFileCount,
     compiledOutputSha256: compiled.compiledOutputSha256,
+    toolchainPackageRootCount: toolchainFacts.dependencyPackageRootCount,
+    toolchainFileCount: toolchainFacts.dependencyFileCount,
+    toolchainSha256: toolchainFacts.dependencySha256,
   });
   await writeFile(join(buildRoot, "b6-runtime-build.json"), `${JSON.stringify(metadata)}\n`, { encoding: "utf8", flag: "wx" });
   complete = true;
