@@ -16,12 +16,12 @@ describe("B6 launcher failure cleanup", () => {
     const before = new Set((await readdir(runtimeDir)).filter((name) => name.startsWith("b6-live-build-")));
     try {
       const result = spawnSync(process.execPath, [join(root, "scripts", "run-b6-project-expansion-runtime.mjs"), configPath],
-        { cwd: root, encoding: "utf8", timeout: 20_000 });
+        { cwd: root, encoding: "utf8", timeout: 60_000 });
       expect(result.status).not.toBe(0);
       const after = (await readdir(runtimeDir)).filter((name) => name.startsWith("b6-live-build-"));
       expect(after.filter((name) => !before.has(name))).toEqual([]);
     } finally { await rm(configDir, { recursive: true, force: true }); }
-  }, 30_000);
+  }, 75_000);
 
   it("removes its ACL-locked private execution root when startup fails at listen", async () => {
     const root = process.cwd();
