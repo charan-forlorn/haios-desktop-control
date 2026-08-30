@@ -1,7 +1,8 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { access, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
+import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve, sep, win32 } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -10,6 +11,7 @@ const RESULT_NAME = "m12-disposable-b5-result.json";
 const FIXTURE_MARKER = "HAIOS_M12_DISPOSABLE_B5_FIXTURE_R1\n";
 const OBSERVED_TOOL_DISPATCHES = new Set();
 let runtimeModules;
+let runtimeDistRoot;
 
 function fail(code) { throw new Error(code); }
 function digest(value) { return createHash("sha256").update(value, "utf8").digest("hex"); }
@@ -81,11 +83,11 @@ async function prepareFreshRuntime() {
   const headSha = await git(["rev-parse", "HEAD"], ROOT);
   if (!/^[a-f0-9]{40}$/u.test(headSha)) fail("M12_DISPOSABLE_HEAD_INVALID");
   const source = await deterministicTrackedSourceManifest();
-  const distRoot = join(ROOT, "dist");
-  await rm(distRoot, { recursive: true, force: true });
+  const distRoot = await mkdtemp(join(tmpdir(), "m12-disposable-build-"));
+  runtimeDistRoot = distRoot;
   const tscCli = join(ROOT, "node_modules", "typescript", "bin", "tsc");
   if (!(await exists(tscCli))) fail("M12_DISPOSABLE_BUILD_TOOL_MISSING");
-  await executeFixed(process.execPath, [tscCli, "--project", join(ROOT, "tsconfig.json")], ROOT, "FRESH_BUILD");
+  await executeFixed(process.execPath, [tscCli, "--project", join(ROOT, "tsconfig.json"), "--outDir", distRoot], ROOT, "FRESH_BUILD");
   const compiled = await deterministicDirectoryDigest(distRoot);
   const [control, config, active, localGit, protocol] = await Promise.all([
     import(pathToFileURL(join(distRoot, "src", "operator", "control-runtime.js")).href),
@@ -104,10 +106,12 @@ async function prepareFreshRuntime() {
   return Object.freeze({ headSha, sourceManifestSha256: source.sha256, sourceFileCount: source.fileCount,
     compiledOutputSha256: compiled.sha256, compiledFileCount: compiled.fileCount, freshBuild: true });
 }
+
 async function assertRuntimeProvenanceStable(provenance) {
   await assertTrackedWorktreeClean();
+  if (runtimeDistRoot === undefined) fail("M12_DISPOSABLE_RUNTIME_NOT_PREPARED");
   const [headSha, source, compiled] = await Promise.all([
-    git(["rev-parse", "HEAD"], ROOT), deterministicTrackedSourceManifest(), deterministicDirectoryDigest(join(ROOT, "dist")),
+    git(["rev-parse", "HEAD"], ROOT), deterministicTrackedSourceManifest(), deterministicDirectoryDigest(runtimeDistRoot),
   ]);
   if (headSha !== provenance.headSha || source.sha256 !== provenance.sourceManifestSha256
     || source.fileCount !== provenance.sourceFileCount || compiled.sha256 !== provenance.compiledOutputSha256
@@ -360,4 +364,10 @@ async function main() {
   await writeFile(join(config.outputRoot, RESULT_NAME), `${JSON.stringify(result, null, 2)}\n`, "utf8");
 }
 
-await main();
+try { await main(); } finally {
+  if (runtimeDistRoot !== undefined) {
+    const root = runtimeDistRoot;
+    runtimeDistRoot = undefined;
+    await rm(root, { recursive: true, force: true });
+  }
+}
