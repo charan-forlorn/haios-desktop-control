@@ -4,7 +4,7 @@ export type RecoveryClassification =
   | "MANUAL_RECONCILIATION_REQUIRED";
 
 export interface RecoveryClassificationInput {
-  readonly projectId: "operator-canary";
+  readonly projectId: "operator-canary" | "skill-fabric" | "hermes-os";
   readonly repositoryIdentity: string;
   readonly transactionId: string;
   readonly leaseOwner: "LIVE" | "DEAD_OR_REUSED" | "UNKNOWN";
@@ -41,7 +41,7 @@ function data(value: unknown): Record<string, unknown> {
 
 export function classifyRecovery(input: RecoveryClassificationInput): RecoveryClassification {
   const value = data(input);
-  if (value.projectId !== "operator-canary") return deny();
+  if (!["operator-canary", "skill-fabric", "hermes-os"].includes(value.projectId as string)) return deny();
   if (typeof value.repositoryIdentity !== "string" || value.repositoryIdentity.length === 0) return deny();
   if (typeof value.transactionId !== "string" || !/^txn_[a-f0-9]{32}$/u.test(value.transactionId)) return deny();
   if (!["LIVE", "DEAD_OR_REUSED", "UNKNOWN"].includes(value.leaseOwner as string)) return deny();

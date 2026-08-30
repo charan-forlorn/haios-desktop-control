@@ -27,7 +27,7 @@ export interface RemediationInvariant {
 /** Facts constructed by the server's transaction/currentness boundary, never tool input. */
 export interface RemediationObservation {
   readonly episodeId: string;
-  readonly projectId: "operator-canary";
+  readonly projectId: "operator-canary" | "skill-fabric" | "hermes-os";
   readonly repositoryIdentity: string;
   readonly transactionId: string;
   readonly baseHeadSha: string;
@@ -143,14 +143,15 @@ function enumValue<T extends string>(value: unknown, values: ReadonlySet<T>): T 
 
 function normalizeObservation(value: unknown): NormalizedObservation {
   const fields = ownDataFields(value, OBSERVATION_FIELDS, OBSERVATION_FIELDS);
-  if (fields.get("projectId") !== "operator-canary") return deny();
+  const projectId = fields.get("projectId");
+  if (projectId !== "operator-canary" && projectId !== "skill-fabric" && projectId !== "hermes-os") return deny();
   const fingerprintFields = ownDataFields(fields.get("fingerprint"), FINGERPRINT_FIELDS, FINGERPRINT_FIELDS);
   const invariantFields = ownDataFields(fields.get("invariant"), INVARIANT_FIELDS, INVARIANT_FIELDS);
   const invariantName = identifier(invariantFields.get("name"));
   const invariantValue = identifier(invariantFields.get("value"));
   return Object.freeze({
     episodeId: episodeId(fields.get("episodeId")),
-    projectId: "operator-canary" as const,
+    projectId,
     repositoryIdentity: repositoryIdentity(fields.get("repositoryIdentity")),
     transactionId: identifier(fields.get("transactionId")),
     baseHeadSha: headSha(fields.get("baseHeadSha")),
@@ -225,7 +226,7 @@ function eligibleFailureSnapshot(observation: NormalizedObservation, decisionRes
   return Object.freeze({
     schema: "HAIOS_M12_REMEDIATION_EPISODE_R1" as const,
     episodeId: observation.episodeId,
-    projectId: "operator-canary" as const,
+    projectId: observation.projectId,
     repositoryIdentity: observation.repositoryIdentity,
     transactionId: observation.transactionId,
     baseHeadSha: observation.baseHeadSha,

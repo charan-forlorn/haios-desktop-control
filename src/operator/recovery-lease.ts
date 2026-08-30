@@ -7,13 +7,15 @@ export const M12_RECOVERY_LEASE_CONFLICT = "M12_RECOVERY_LEASE_CONFLICT" as cons
 export const M12_RECOVERY_LEASE_RECONCILIATION_REQUIRED = "M12_RECOVERY_LEASE_RECONCILIATION_REQUIRED" as const;
 export const RECOVERY_LEASE_SCHEMA = "HAIOS_M12_RECOVERY_LEASE_R1" as const;
 export const M12_RUNTIME_IDENTITY = "HAIOS_M12_OPERATOR_RUNTIME_R1" as const;
+/** Final B5 recovery remains closed to the B6 successor set; no arbitrary project identity is accepted. */
+export type FinalB5ProjectId = "operator-canary" | "skill-fabric" | "hermes-os";
 
 export interface ProcessIdentityProbe {
   inspect(pid: number): Promise<{ readonly alive: boolean; readonly startTime: string } | undefined>;
 }
 
 export interface RecoveryLeaseRequest {
-  readonly projectId: "operator-canary";
+  readonly projectId: FinalB5ProjectId;
   readonly repositoryIdentity: string;
   readonly transactionId: string;
   readonly ownerPid: number;
@@ -57,8 +59,11 @@ function canonical(value: Json): string {
 function sha256(value: Json): string {
   return createHash("sha256").update(canonical(value), "utf8").digest("hex");
 }
+function validProjectId(value: unknown): value is FinalB5ProjectId {
+  return value === "operator-canary" || value === "skill-fabric" || value === "hermes-os";
+}
 function validateRequest(input: RecoveryLeaseRequest): RecoveryLeaseRequest {
-  if (input.projectId !== "operator-canary" || !TX.test(input.transactionId)) return deny(M12_RECOVERY_LEASE_DENIED);
+  if (!validProjectId(input.projectId) || !TX.test(input.transactionId)) return deny(M12_RECOVERY_LEASE_DENIED);
   if (typeof input.repositoryIdentity !== "string" || input.repositoryIdentity.length === 0 || input.repositoryIdentity.length > 4096) {
     return deny(M12_RECOVERY_LEASE_DENIED);
   }
@@ -89,13 +94,13 @@ function parseRecord(text: string): RecoveryLeaseRecord {
   const v = value as Record<string, unknown>;
   const expected = ["schema", "runtimeIdentity", "projectId", "repositoryIdentity", "transactionId", "ownerPid", "ownerStartTime", "ttlMs", "acquiredAt", "heartbeatAt", "expiresAt", "hash"];
   if (Object.keys(v).length !== expected.length || expected.some((key) => !(key in v))) return deny(M12_RECOVERY_LEASE_RECONCILIATION_REQUIRED);
-  if (v.schema !== RECOVERY_LEASE_SCHEMA || v.runtimeIdentity !== M12_RUNTIME_IDENTITY || v.projectId !== "operator-canary") {
+  if (v.schema !== RECOVERY_LEASE_SCHEMA || v.runtimeIdentity !== M12_RUNTIME_IDENTITY || !validProjectId(v.projectId)) {
     return deny(M12_RECOVERY_LEASE_RECONCILIATION_REQUIRED);
   }
   let request: RecoveryLeaseRequest;
   try {
     request = validateRequest({
-      projectId: "operator-canary", repositoryIdentity: v.repositoryIdentity as string,
+      projectId: v.projectId as FinalB5ProjectId, repositoryIdentity: v.repositoryIdentity as string,
       transactionId: v.transactionId as string, ownerPid: v.ownerPid as number,
       ownerStartTime: v.ownerStartTime as string, ttlMs: v.ttlMs as number,
     });

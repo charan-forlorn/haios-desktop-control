@@ -233,6 +233,7 @@ export async function scanM12CanonicalGitCommonDirForLocks(commonDir: string): P
 interface M12RecoveryRuntimeConfig {
   readonly stateRoot: string;
   readonly worktreeRoot: string;
+  readonly allowedProjectIds?: readonly ("operator-canary" | "skill-fabric" | "hermes-os")[];
   readonly probe?: M12RuntimeProcessProbe;
   readonly now?: () => number;
 }
@@ -244,13 +245,26 @@ class M12RuntimeRecoveryCoordinator implements OperatorTransactionRecoveryCoordi
   readonly #probe: M12RuntimeProcessProbe;
   readonly #leases: RecoveryLeaseManager;
   readonly #heartbeats = new Map<string, M12RecoveryLeaseHeartbeat>();
+  readonly #allowedProjectIds: ReadonlySet<string>;
   constructor(config: M12RecoveryRuntimeConfig) {
     this.#stateRoot = resolve(config.stateRoot);
     this.#worktreeRoot = win32.resolve(config.worktreeRoot);
     this.#probe = config.probe ?? new RuntimeProcessProbe();
+    this.#allowedProjectIds = new Set(config.allowedProjectIds ?? ["operator-canary"]);
+    if (this.#allowedProjectIds.size === 0 || [...this.#allowedProjectIds].some((id) => id !== "operator-canary" && id !== "skill-fabric" && id !== "hermes-os")) {
+      throw new Error("M12_RECOVERY_PROJECT_POLICY_DENIED");
+    }
     this.#leases = new RecoveryLeaseManager({
       stateRoot: this.#stateRoot, processProbe: this.#probe, ...(config.now === undefined ? {} : { now: config.now }),
     });
+  }
+  projectAllowed(projectId: string): projectId is "operator-canary" | "skill-fabric" | "hermes-os" {
+    return this.#allowedProjectIds.has(projectId);
+  }
+  #matchesSnapshot(snapshot: RecoverySnapshot, record: OperatorTransactionRecord): boolean {
+    const saved = snapshot.record;
+    return saved.txId === record.txId && saved.projectId === record.projectId && saved.canonicalRoot === record.canonicalRoot
+      && saved.worktreePath === record.worktreePath && saved.branchName === record.branchName && saved.baseHeadSha === record.baseHeadSha;
   }
   async #directory(): Promise<string> {
     await mkdir(this.#stateRoot, { recursive: true });
@@ -270,7 +284,7 @@ class M12RuntimeRecoveryCoordinator implements OperatorTransactionRecoveryCoordi
     return join(await this.#directory(), `${txId}.json`);
   }
   #snapshot(record: OperatorTransactionRecord, repositoryIdentity: string): RecoverySnapshot {
-    if (record.projectId !== "operator-canary" || record.intents.length !== 0 || !contained(this.#worktreeRoot, record.worktreePath)) {
+    if (!this.#allowedProjectIds.has(record.projectId) || record.intents.length !== 0 || !contained(this.#worktreeRoot, record.worktreePath)) {
       throw new Error("M12_RECOVERY_RECORD_DENIED");
     }
     const base = Object.freeze({
@@ -291,7 +305,7 @@ class M12RuntimeRecoveryCoordinator implements OperatorTransactionRecoveryCoordi
       throw new Error("M12_RECOVERY_RECORD_RECONCILIATION_REQUIRED");
     }
     const value = JSON.parse(await readFile(path, "utf8")) as RecoverySnapshot;
-    if (value.schema !== RECOVERY_SCHEMA || value.record?.txId !== txId || value.record.projectId !== "operator-canary") {
+    if (value.schema !== RECOVERY_SCHEMA || value.record?.txId !== txId || !this.#allowedProjectIds.has(value.record.projectId)) {
       throw new Error("M12_RECOVERY_RECORD_RECONCILIATION_REQUIRED");
     }
     const base = { schema: value.schema, record: value.record, repositoryIdentity: value.repositoryIdentity };
@@ -315,7 +329,7 @@ class M12RuntimeRecoveryCoordinator implements OperatorTransactionRecoveryCoordi
   async onBegin(record: OperatorTransactionRecord, repositoryIdentity: string): Promise<void> {
     const owner = await this.#probe.current();
     const lease = await this.#leases.acquire({
-      projectId: "operator-canary", repositoryIdentity, transactionId: record.txId,
+      projectId: record.projectId as "operator-canary" | "skill-fabric" | "hermes-os", repositoryIdentity, transactionId: record.txId,
       ownerPid: owner.ownerPid, ownerStartTime: owner.ownerStartTime, ttlMs: RECOVERY_TTL_MS,
     });
     const snapshot = this.#snapshot(record, repositoryIdentity);
@@ -342,6 +356,7 @@ class M12RuntimeRecoveryCoordinator implements OperatorTransactionRecoveryCoordi
     this.#heartbeats.delete(record.txId);
     heartbeat?.assertHealthy();
     const snapshot = await this.#read(record.txId);
+    if (!this.#matchesSnapshot(snapshot, record)) throw new Error("M12_RECOVERY_RECORD_RECONCILIATION_REQUIRED");
     const inspection = await this.#leases.inspect(record.txId, snapshot.repositoryIdentity);
     if (inspection === undefined || inspection.owner !== "LIVE" || inspection.expired || !inspection.repositoryMatch) {
       throw new Error("M12_RECOVERY_TERMINAL_RECONCILIATION_REQUIRED");
@@ -365,6 +380,7 @@ class M12RuntimeRecoveryCoordinator implements OperatorTransactionRecoveryCoordi
   }
   async classificationInput(record: OperatorTransactionRecord): Promise<RecoveryClassificationInput> {
     const snapshot = await this.#read(record.txId);
+    if (!this.#matchesSnapshot(snapshot, record)) throw new Error("M12_RECOVERY_RECORD_RECONCILIATION_REQUIRED");
     const lease = await this.#leases.inspect(record.txId, snapshot.repositoryIdentity);
     if (lease === undefined) throw new Error("M12_RECOVERY_LEASE_MISSING");
     let canonicalIdentity: string;
@@ -386,7 +402,7 @@ class M12RuntimeRecoveryCoordinator implements OperatorTransactionRecoveryCoordi
       ]);
     } catch {
       return Object.freeze({
-        projectId: "operator-canary", repositoryIdentity: snapshot.repositoryIdentity, transactionId: record.txId,
+        projectId: record.projectId as "operator-canary" | "skill-fabric" | "hermes-os", repositoryIdentity: snapshot.repositoryIdentity, transactionId: record.txId,
         leaseOwner: lease.owner, leaseExpired: lease.expired, repositoryMatch: false, ownership: "AMBIGUOUS",
         transactionState: "AMBIGUOUS", unresolvedEffects: true, foreignGitLock: true,
       });
@@ -398,7 +414,7 @@ class M12RuntimeRecoveryCoordinator implements OperatorTransactionRecoveryCoordi
       ? worktreeHead === record.baseHeadSha && worktreeStatus.trim() === "" ? "CLEAN" : "MUTATED"
       : "AMBIGUOUS";
     return Object.freeze({
-      projectId: "operator-canary", repositoryIdentity: snapshot.repositoryIdentity, transactionId: record.txId,
+      projectId: record.projectId as "operator-canary" | "skill-fabric" | "hermes-os", repositoryIdentity: snapshot.repositoryIdentity, transactionId: record.txId,
       leaseOwner: lease.owner, leaseExpired: lease.expired,
       repositoryMatch: repoMatch && canonicalCurrent,
       ownership: repoMatch && contained(this.#worktreeRoot, record.worktreePath) ? "EXACT" : "AMBIGUOUS",
@@ -419,7 +435,7 @@ class M12RuntimeRecoveryCoordinator implements OperatorTransactionRecoveryCoordi
     if (decision !== "SAFE_TO_ROLLBACK") return decision;
     const snapshot = await this.#read(record.txId).catch(() => undefined);
     const lease = await this.#leases.inspect(record.txId, input.repositoryIdentity).catch(() => undefined);
-    if (snapshot === undefined || lease === undefined || lease.owner !== "DEAD_OR_REUSED" || !lease.expired || !lease.repositoryMatch) {
+    if (snapshot === undefined || !this.#matchesSnapshot(snapshot, record) || lease === undefined || lease.owner !== "DEAD_OR_REUSED" || !lease.expired || !lease.repositoryMatch) {
       return "MANUAL_RECONCILIATION_REQUIRED";
     }
     try {
@@ -482,15 +498,15 @@ class RuntimeFactsProvider implements M12StabilityFactsProvider {
     try { recovery = await this.#recovery.classificationInput(record); }
     catch {
       recovery = Object.freeze({
-        projectId: "operator-canary", repositoryIdentity: repositoryIdentity || "UNKNOWN", transactionId,
+        projectId: record.projectId as "operator-canary" | "skill-fabric" | "hermes-os", repositoryIdentity: repositoryIdentity || "UNKNOWN", transactionId,
         leaseOwner: "UNKNOWN", leaseExpired: false, repositoryMatch: false, ownership: "AMBIGUOUS",
         transactionState: "AMBIGUOUS", unresolvedEffects: true, foreignGitLock: true,
       });
     }
     const invariantValue = sha256({ state: status.state ?? record.state, canonicalHead, canonicalStatus, worktreeHead, worktreeStatus });
     return Object.freeze({
-      projectId: "operator-canary", repositoryIdentity: recovery.repositoryIdentity, baseHeadSha: record.baseHeadSha,
-      authority: record.projectId === "operator-canary" ? "AUTHORIZED" : "DENIED",
+      projectId: record.projectId as "operator-canary" | "skill-fabric" | "hermes-os", repositoryIdentity: recovery.repositoryIdentity, baseHeadSha: record.baseHeadSha,
+      authority: this.#recovery.projectAllowed(record.projectId) ? "AUTHORIZED" : "DENIED",
       currentness, emergency: "NONE",
       invariant: Object.freeze({ name: "transaction-state-digest", value: invariantValue }),
       recovery,
@@ -498,7 +514,7 @@ class RuntimeFactsProvider implements M12StabilityFactsProvider {
   }
 }
 
-async function assertStatePaths(config: Pick<M12OperatorCompositionConfig, "stateRoot" | "worktreeRoot">): Promise<void> {
+async function assertStatePaths(config: Pick<FinalB5OperatorCompositionConfig, "stateRoot" | "worktreeRoot">): Promise<void> {
   await mkdir(config.stateRoot, { recursive: true });
   await mkdir(config.worktreeRoot, { recursive: true });
   const stateReal = await realpath(config.stateRoot);
@@ -507,20 +523,20 @@ async function assertStatePaths(config: Pick<M12OperatorCompositionConfig, "stat
     throw new Error("M12_ACTIVE_CANARY_STATE_PATH_RECONCILIATION_REQUIRED");
   }
 }
-interface M12OperatorCompositionConfig {
+export interface FinalB5OperatorCompositionConfig {
   readonly worktreeRoot: string;
   readonly stateRoot: string;
-  readonly allowedProjects: Readonly<Record<string, string>>;
+  readonly allowedProjects: Readonly<Partial<Record<"operator-canary" | "skill-fabric" | "hermes-os", string>>>;
 }
 
 async function createM12Operator(
-  config: M12OperatorCompositionConfig,
+  config: FinalB5OperatorCompositionConfig,
   recoveryOptions: Omit<M12RecoveryRuntimeConfig, "stateRoot" | "worktreeRoot"> = {},
 ): Promise<M12ActiveCanaryOperatorRuntime> {
   await assertStatePaths(config);
   const paths = runtimeIdentityPaths();
   const recovery = new M12RuntimeRecoveryCoordinator({
-    stateRoot: config.stateRoot, worktreeRoot: config.worktreeRoot, ...recoveryOptions,
+    stateRoot: config.stateRoot, worktreeRoot: config.worktreeRoot, allowedProjectIds: Object.keys(config.allowedProjects) as ("operator-canary" | "skill-fabric" | "hermes-os")[], ...recoveryOptions,
   });
   const base = await createQualifiedOperatorControlRuntime({
     worktreeRoot: config.worktreeRoot, allowedProjects: config.allowedProjects,
@@ -561,6 +577,14 @@ export function createM12ActiveCanaryReadinessMetadata(config: unknown): M12Acti
 }
 export async function createM12ActiveCanaryOperatorRuntime(config: unknown): Promise<M12ActiveCanaryOperatorRuntime> {
   return createM12Operator(validateM12ActiveCanaryConfig(config));
+}
+/** Internal final-B5 composition seam used by the strictly closed B6 successor only. */
+export async function createFinalB5OperatorRuntime(config: FinalB5OperatorCompositionConfig): Promise<M12ActiveCanaryOperatorRuntime> {
+  const ids = Object.keys(config.allowedProjects);
+  if (ids.length === 0 || ids.some((id) => id !== "operator-canary" && id !== "skill-fabric" && id !== "hermes-os")) {
+    throw new Error("M12_FINAL_B5_PROJECT_POLICY_DENIED");
+  }
+  return createM12Operator(config);
 }
 export function isM12ActiveCanaryOperatorRuntime(value: unknown): value is M12ActiveCanaryOperatorRuntime {
   return typeof value === "object" && value !== null && M12_CORE_RUNTIMES.has(value as object);

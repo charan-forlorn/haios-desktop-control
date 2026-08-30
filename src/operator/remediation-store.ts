@@ -12,7 +12,7 @@ export type RemediationRecovery = "SAFE_TO_CONTINUE" | "SAFE_TO_ROLLBACK" | "MAN
 export interface RemediationEpisodeSnapshot {
   readonly schema: typeof REMEDIATION_EPISODE_SCHEMA;
   readonly episodeId: string;
-  readonly projectId: "operator-canary";
+  readonly projectId: "operator-canary" | "skill-fabric" | "hermes-os";
   readonly repositoryIdentity: string;
   readonly transactionId: string;
   readonly baseHeadSha: string;
@@ -300,15 +300,19 @@ function canonicalTransitionLineageJson(lineage: TransitionLineage): string {
   });
 }
 
+function admittedProjectId(value: unknown, error: string): "operator-canary" | "skill-fabric" | "hermes-os" {
+  if (value === "operator-canary" || value === "skill-fabric" || value === "hermes-os") return value;
+  return deny(error);
+}
 function snapshotFromFields(fields: ReadonlyMap<string, unknown>, error: string): RemediationEpisodeSnapshot {
-  if (fields.get("schema") !== REMEDIATION_EPISODE_SCHEMA || fields.get("projectId") !== "operator-canary") return deny(error);
+  if (fields.get("schema") !== REMEDIATION_EPISODE_SCHEMA) return deny(error);
   const replanUsed = fields.get("replanUsed");
   const recovery = fields.get("recovery");
   if (typeof replanUsed !== "boolean" || typeof recovery !== "string" || !RECOVERY_VALUES.has(recovery as RemediationRecovery)) return deny(error);
   return Object.freeze({
     schema: REMEDIATION_EPISODE_SCHEMA,
     episodeId: episodeIdentifier(fields.get("episodeId"), error),
-    projectId: "operator-canary" as const,
+    projectId: admittedProjectId(fields.get("projectId"), error),
     repositoryIdentity: repositoryIdentity(fields.get("repositoryIdentity"), error),
     transactionId: identifier(fields.get("transactionId"), error),
     baseHeadSha: headSha(fields.get("baseHeadSha"), error),

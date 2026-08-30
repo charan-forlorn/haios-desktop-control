@@ -10,7 +10,7 @@ import type { OperatorTransactionRecoveryCoordinator } from "./transaction-isola
 export const M12_STABILITY_COORDINATOR_DENIED = "M12_STABILITY_COORDINATOR_DENIED" as const;
 
 export interface M12StabilityFacts {
-  readonly projectId: "operator-canary";
+  readonly projectId: "operator-canary" | "skill-fabric" | "hermes-os";
   readonly repositoryIdentity: string;
   readonly baseHeadSha: string;
   readonly authority: "AUTHORIZED" | "DENIED" | "UNKNOWN";
@@ -40,6 +40,9 @@ export interface M12StabilityResult {
 }
 
 function deny(): never { throw new Error(M12_STABILITY_COORDINATOR_DENIED); }
+function admittedProjectId(value: unknown): value is M12StabilityFacts["projectId"] {
+  return value === "operator-canary" || value === "skill-fabric" || value === "hermes-os";
+}
 function code(value: string, fallback: string): string {
   return /^[A-Za-z0-9._:-]{1,256}$/u.test(value) ? value : fallback;
 }
@@ -99,7 +102,7 @@ export class M12StabilityCoordinator {
     const proof = this.#pendingReplanProofs.get(id);
     if (proof === undefined || proof.txId !== request.txId || proof.taskId !== request.taskId) return deny();
     const facts = await this.#facts.inspect(request.txId);
-    if (facts === undefined || facts.projectId !== "operator-canary" || facts.authority !== "AUTHORIZED"
+    if (facts === undefined || !admittedProjectId(facts.projectId) || facts.authority !== "AUTHORIZED"
       || facts.currentness !== "CURRENT" || facts.emergency !== "NONE"
       || facts.recovery.transactionId !== request.txId || facts.recovery.repositoryIdentity !== facts.repositoryIdentity
       || facts.recovery.projectId !== facts.projectId) return deny();
@@ -118,7 +121,7 @@ export class M12StabilityCoordinator {
   async observeTaskResult(request: OperatorTaskRunRequest, result: OperatorTaskRunResult): Promise<M12StabilityResult> {
     validateRequest(request);
     const facts = await this.#facts.inspect(request.txId);
-    if (facts === undefined || facts.projectId !== "operator-canary") return deny();
+    if (facts === undefined || !admittedProjectId(facts.projectId)) return deny();
     const recovery = normalizedRecovery(result, facts);
     if (facts.recovery.transactionId !== request.txId || facts.recovery.repositoryIdentity !== facts.repositoryIdentity
       || facts.recovery.projectId !== facts.projectId) return deny();
@@ -137,7 +140,7 @@ export class M12StabilityCoordinator {
     const id = episodeId(request);
     const decision = await this.#remediation.record({
       episodeId: id,
-      projectId: "operator-canary",
+      projectId: facts.projectId,
       repositoryIdentity: facts.repositoryIdentity,
       transactionId: request.txId,
       baseHeadSha: facts.baseHeadSha,
