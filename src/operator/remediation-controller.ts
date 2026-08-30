@@ -240,6 +240,7 @@ function eligibleFailureSnapshot(observation: NormalizedObservation, decisionRes
 
 export class RemediationController {
   readonly #store: RemediationStore;
+  readonly #safetyRevokedEpisodes = new Set<string>();
   #operationTail: Promise<void> = Promise.resolve();
 
   constructor(store: RemediationStore) {
@@ -252,6 +253,11 @@ export class RemediationController {
       const observation = normalizeObservation(observationInput);
       const previous = await this.#store.load(observation.episodeId);
       const result = decideRemediation(previous, observationInput);
+      const safety = safetyDirective(observation);
+      if (safety !== undefined || observation.failure === "NON_REMEDIABLE_FAILURE") {
+        this.#safetyRevokedEpisodes.add(observation.episodeId);
+        return result;
+      }
       if (observation.failure !== "REMEDIATION_ELIGIBLE_FAILURE") return result;
       await this.#store.save(eligibleFailureSnapshot(observation, result));
       return result;
@@ -265,6 +271,7 @@ export class RemediationController {
   async acceptCleanStateReplan(episodeIdInput: string, preconditionsInput: CleanStateReplanPreconditions): Promise<RemediationEpisodeRecord> {
     return this.#serialized(async () => {
       const id = episodeId(episodeIdInput);
+      if (this.#safetyRevokedEpisodes.has(id)) deny();
       const preconditions = normalizeCleanStateReplanPreconditions(preconditionsInput);
       if (preconditions.activeMutableCodeProcess || preconditions.unresolvedTaskEffects || preconditions.ownership !== "UNAMBIGUOUS"
         || preconditions.recovery !== "SAFE_TO_CONTINUE") deny();

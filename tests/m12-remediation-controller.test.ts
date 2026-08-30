@@ -223,7 +223,7 @@ describe("M12 bounded remediation controller transition matrix", () => {
     await expect(store.load("episode-001")).resolves.toBeUndefined();
   });
 
-  it("persists every eligible unsafe or budget failure before returning its directive", async () => {
+  it("does not persist safety-denied eligible failures but still persists safe budget terminals", async () => {
     const { controller, store } = await controllerFixture();
     await controller.record(observation());
 
@@ -233,7 +233,7 @@ describe("M12 bounded remediation controller transition matrix", () => {
     }))).resolves.toEqual({ directive: "MANUAL_RECONCILIATION_REQUIRED", attempt: 1, replanUsed: false });
     await expect(store.load("episode-001")).resolves.toMatchObject({
       attempt: 1,
-      fineFingerprint: FINE_B,
+      fineFingerprint: FINE_A,
       recovery: "SAFE_TO_CONTINUE",
     });
 
@@ -301,7 +301,7 @@ describe("M12 bounded remediation controller transition matrix", () => {
     await expect(new RemediationStore(stateRoot).load("episode-001"))
       .rejects.toThrow("M12_REMEDIATION_STATE_RECONCILIATION_REQUIRED");
   });
-  it("durably records an attempt-two safety failure and revokes stale replan authority", async () => {
+  it("does not mutate a pending durable replan on safety denial and revokes same-process acceptance", async () => {
     const { controller, store } = await controllerFixture();
     await controller.record(observation());
     await expect(controller.record(observation({ fingerprint: { coarse: COARSE_A, fine: FINE_B } })))
@@ -311,7 +311,7 @@ describe("M12 bounded remediation controller transition matrix", () => {
       authority: "UNKNOWN",
       fingerprint: { coarse: COARSE_A, fine: FINE_A },
     }))).resolves.toEqual({ directive: "MANUAL_RECONCILIATION_REQUIRED", attempt: 2, replanUsed: false });
-    await expect(store.load("episode-001")).resolves.toMatchObject({ attempt: 2, fineFingerprint: FINE_A });
+    await expect(store.load("episode-001")).resolves.toMatchObject({ attempt: 2, fineFingerprint: FINE_B });
     await expect(controller.acceptCleanStateReplan("episode-001", cleanStatePreconditions()))
       .rejects.toThrow("M12_REMEDIATION_CONTROLLER_DENIED");
   });
