@@ -5,6 +5,7 @@ import { lstat, mkdir, open, readFile, readdir, realpath, rm, unlink, writeFile 
 import { dirname, isAbsolute, join, relative, resolve, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { verifyB6StageOneAdmission } from "./b6-stage-one-proof.js";
 import { createOperatorControlRuntime, type OperatorControlRuntime } from "./control-runtime.js";
 import { LocalOperatorGit, readLocalGitCurrentBranch } from "./local-git.js";
 import {
@@ -607,6 +608,7 @@ function validateB6FinalComposition(value: unknown): B6FinalB5OperatorCompositio
 /** B6-only final-B5 seam: state paths and project roots are server-owned and never caller-selected. */
 export async function createB6FinalB5OperatorRuntime(value: unknown): Promise<M12ActiveCanaryOperatorRuntime> {
   const config = validateB6FinalComposition(value);
+  if (config.stage === "HERMES_OS") await verifyB6StageOneAdmission();
   const allowedProjects = config.stage === "SKILL_FABRIC"
     ? Object.freeze({ "operator-canary": M12_ACTIVE_CANARY_PROJECT_ROOT, "skill-fabric": B6_FINAL_SKILL_FABRIC_ROOT })
     : Object.freeze({ "operator-canary": M12_ACTIVE_CANARY_PROJECT_ROOT, "skill-fabric": B6_FINAL_SKILL_FABRIC_ROOT, "hermes-os": B6_FINAL_HERMES_OS_ROOT });

@@ -22,7 +22,7 @@ export async function currentCandidateFacts() {
   return Object.freeze({ candidateHeadSha: await git(["rev-parse", "HEAD"]), candidateTrackedCount: paths.length,
     candidateManifestSha256: sha256(Buffer.from(`${rows.join("\n")}\n`, "utf8")), clean: (await git(["status", "--porcelain=v1"])) === "" });
 }
-async function compiledDigest(buildRoot) {
+export async function compiledDigest(buildRoot) {
   const files = [];
   async function visit(dir) {
     for (const entry of await readdir(dir, { withFileTypes: true })) {
@@ -38,6 +38,29 @@ async function compiledDigest(buildRoot) {
   for (const path of files) rows.push(`${sha256(await readFile(path))}  ${relative(buildRoot, path).split(sep).join("/")}`);
   return Object.freeze({ compiledFileCount: files.length, compiledOutputSha256: sha256(Buffer.from(`${rows.join("\n")}\n`, "utf8")) });
 }
+export async function verifyPreparedB6RuntimeBuild(prepared) {
+  if (prepared?.schema !== "HAIOS_B6_RUNTIME_BUILD_R1"
+    || !/^[a-f0-9]{64}$/u.test(prepared.candidateManifestSha256 ?? "")
+    || !/^[a-f0-9]{64}$/u.test(prepared.compiledOutputSha256 ?? "")
+    || !Number.isSafeInteger(prepared.compiledFileCount) || prepared.compiledFileCount <= 0) {
+    throw new Error("B6_RUNTIME_BUILD_ATTESTATION_INVALID");
+  }
+  const runtimeReal = await realpath(runtimeRoot);
+  const buildRoot = await realpath(resolve(prepared.buildRoot));
+  const rel = relative(runtimeReal, buildRoot);
+  if (rel === "" || isAbsolute(rel) || rel === ".." || rel.startsWith(`..${sep}`)) throw new Error("B6_RUNTIME_BUILD_ROOT_DENIED");
+  const metadata = JSON.parse(await readFile(join(buildRoot, "b6-runtime-build.json"), "utf8"));
+  if (metadata.schema !== "HAIOS_B6_RUNTIME_BUILD_R1"
+    || metadata.candidateHeadSha !== prepared.candidateHeadSha
+    || metadata.candidateManifestSha256 !== prepared.candidateManifestSha256
+    || metadata.compiledOutputSha256 !== prepared.compiledOutputSha256
+    || metadata.compiledFileCount !== prepared.compiledFileCount) throw new Error("B6_RUNTIME_BUILD_METADATA_DRIFT");
+  const current = await compiledDigest(buildRoot);
+  if (current.compiledFileCount !== prepared.compiledFileCount
+    || current.compiledOutputSha256 !== prepared.compiledOutputSha256) throw new Error("B6_RUNTIME_COMPILED_OUTPUT_DRIFT");
+  return buildRoot;
+}
+
 async function independentlyRebuildCurrentRuntime(current) {
   const prepared = await run(process.execPath, [join(repoRoot, "scripts", "prepare-b6-runtime-build.mjs")],
     { cwd: repoRoot, encoding: "utf8", windowsHide: true, maxBuffer: 16 * 1024 * 1024 });

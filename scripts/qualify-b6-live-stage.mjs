@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
-import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, readdir, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -32,7 +32,8 @@ const fixtureRelPath = "test/b6-admission-fixture.test.mjs";
 const localAppData = process.env.LOCALAPPDATA;
 if (!localAppData) throw new Error("B6_LIVE_LOCALAPPDATA_REQUIRED");
 const apiKeyFile = resolve(localAppData, "HAIOS", "M10", "operator-api-key");
-const worktreeRoot = resolve(localAppData, "HAIOS", "B6", "worktrees");
+const b6StateRoot = resolve(localAppData, "HAIOS", "B6");
+const worktreeRoot = resolve(b6StateRoot, "worktrees");
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const payload = (result) => JSON.parse(result.content.filter((item) => item.type === "text").map((item) => item.text ?? "").join("\n"));
 const exactTools = (tools) => tools.length === OPERATOR_V1_TOOL_NAMES.length && tools.every((name, index) => name === OPERATOR_V1_TOOL_NAMES[index]);
@@ -45,8 +46,20 @@ async function repositoryFacts(root) {
     manifestSha256: sha256(Buffer.from(`${rows.join("\n")}\n`, "utf8")), clean: (await git(root, ["status", "--porcelain=v1"])) === "" };
 }
 async function residueCount() {
-  try { return (await readdir(worktreeRoot)).length; }
-  catch (error) { if (error?.code === "ENOENT") return 0; throw error; }
+  let total = 0;
+  for (const name of ["worktrees", "transaction-recovery", "leases", "remediation"]) {
+    const path = resolve(b6StateRoot, name);
+    try {
+      const [stat, canonical] = await Promise.all([lstat(path), realpath(path)]);
+      if (!stat.isDirectory() || stat.isSymbolicLink() || canonical !== path) throw new Error("B6_LIVE_OWNED_STATE_RESIDUE");
+      total += (await readdir(path)).length;
+    } catch (error) {
+      if (error?.code === "ENOENT") continue;
+      if (error instanceof Error && error.message === "B6_LIVE_OWNED_STATE_RESIDUE") throw error;
+      throw new Error("B6_LIVE_OWNED_STATE_RESIDUE");
+    }
+  }
+  return total;
 }
 const candidateFacts = await repositoryFacts(repoRoot);
 if (!candidateFacts.clean || candidateFacts.manifestSha256 !== candidateManifestExpected) throw new Error("B6_LIVE_CANDIDATE_NOT_CURRENT");
@@ -116,7 +129,7 @@ try {
   if (rolled.decision !== "ALLOW" || rolled.state !== "ROLLED_BACK") throw new Error("B6_LIVE_ROLLBACK_DENIED");
   const after = await repositoryFacts(canonical);
   const ownedResidueCount = await residueCount();
-  if (!after.clean || after.head !== before.head || after.manifestSha256 !== before.manifestSha256 || ownedResidueCount !== 0) throw new Error("B6_LIVE_POST_ROLLBACK_DRIFT");
+  if (!after.clean || after.head !== before.head || after.manifestSha256 !== before.manifestSha256 || ownedResidueCount !== 0) throw new Error(ownedResidueCount !== 0 ? "B6_LIVE_OWNED_STATE_RESIDUE" : "B6_LIVE_POST_ROLLBACK_DRIFT");
   const common = { stage, targetProjectId: target, result: "PASS", b6CandidateHeadSha: candidateFacts.head,
     b6CandidateManifestSha256: candidateFacts.manifestSha256, exact13Tools: true, projectAdmitted: true,
     canonicalPreHeadSha: before.head, canonicalPostHeadSha: after.head, canonicalPreStatusClean: before.clean,

@@ -36,7 +36,9 @@ describe("B6 staged activation helper boundaries", () => {
     const launcher = await readFile(join(process.cwd(), "scripts", "run-b6-project-expansion-runtime.mjs"), "utf8");
     const preflight = await readFile(join(process.cwd(), "scripts", "preflight-b6-project-expansion.ps1"), "utf8");
     for (const marker of ["certificationHmacSha256", "liveQualificationEvidenceHmacSha256", "HMACSHA256", "operator-api-key"]) expect(preflight).toContain(marker);
-    for (const marker of ["verifyB6StageOneAdmission", "certificationHmacSha256", "liveQualificationEvidenceHmacSha256"]) expect(runtime).toContain(marker);
+    expect(runtime).toContain("verifyB6StageOneAdmission");
+    const proof = await readFile(join(process.cwd(), "src", "operator", "b6-stage-one-proof.ts"), "utf8");
+    for (const marker of ["certificationHmacSha256", "liveQualificationEvidenceHmacSha256"]) expect(proof).toContain(marker);
     expect(launcher).toContain('config.stage === "HERMES_OS"');
     expect(launcher).toContain("-ValidateOnly");
     expect(launcher).toContain("stage1-final-certification.json");
@@ -92,6 +94,13 @@ describe("B6 staged activation helper boundaries", () => {
     const attestation = await readFile(join(process.cwd(), "scripts", "b6-runtime-attestation.mjs"), "utf8");
     expect(launcher).not.toContain('"../dist/src/operator/b6-active-runtime.js"');
     for (const marker of ["prepare-b6-runtime-build.mjs", "pathToFileURL", "candidateManifestSha256", "compiledOutputSha256"]) expect(launcher).toContain(marker);
+    expect(launcher).toContain("const prepared = JSON.parse(preparedProcess.stdout.trim()");
+    expect(launcher).not.toContain("const build = JSON.parse(prepared.stdout");
+    const buildVerifyCalls = [...launcher.matchAll(/verifyPreparedB6RuntimeBuild\(prepared\)/gu)].map((match) => match.index ?? -1);
+    const runtimeImport = launcher.indexOf("await import(");
+    expect(buildVerifyCalls).toHaveLength(2);
+    expect(buildVerifyCalls[0]).toBeLessThan(runtimeImport);
+    expect(buildVerifyCalls[1]).toBeGreaterThan(runtimeImport);
     for (const marker of ["--outDir", "mkdtemp", "runtime", "task-registry.m07.json", "task-effects.m07.json", "candidateManifestSha256", "compiledOutputSha256", "B6_RUNTIME_SOURCE_CHANGED_DURING_BUILD"]) expect(prepare).toContain(marker);
     for (const marker of ["independentlyRebuildCurrentRuntime", "prepare-b6-runtime-build.mjs", "B6_RUNTIME_BUILD_REPRODUCTION_FAILED", "verifier.buildRoot"]) expect(attestation).toContain(marker);
     expect(attestation).toContain('join(verifier.buildRoot, "src", "operator", "host-runtime-config.js")');
@@ -111,6 +120,7 @@ describe("B6 staged activation helper boundaries", () => {
     const sealStage = await readFile(join(process.cwd(), "scripts", "seal-b6-stage.mjs"), "utf8");
     const sealFinal = await readFile(join(process.cwd(), "scripts", "seal-b6-final.mjs"), "utf8");
     for (const marker of ["HERMES_OS", "stage2-live-qualification.json", "skillFabricRegression", "operatorCanaryRegression", "wrongRootDenied", "regressionCleanupTxIds", "for (const regressionTxId of regressionCleanupTxIds)"]) expect(live).toContain(marker);
+    for (const marker of ["transaction-recovery", "leases", "remediation", "B6_LIVE_OWNED_STATE_RESIDUE"]) expect(live).toContain(marker);
     for (const marker of ["HAIOS_DESKTOP_CONTROL_PLANE_R1_B6_HERMES_OS_ADMISSION_QUALIFIED", "stage2-final-certification.json", "B6_STAGE_TWO_CERTIFICATION_CURRENT"]) expect(qualify).toContain(marker);
     for (const marker of ["stage1-evidence-bindings.json", "SHA256SUMS.stage1.txt", "stage1-final-seal.json", "stage1-final-certification.sha256", "stage2-final-seal.json"]) expect(sealStage).toContain(marker);
     for (const marker of ["HAIOS_DESKTOP_CONTROL_PLANE_R1_B6_PROJECT_EXPANSION_QUALIFIED", "b6-final-certification.json", "b6-final-seal.json", "SHA256SUMS.final.txt"]) expect(sealFinal).toContain(marker);

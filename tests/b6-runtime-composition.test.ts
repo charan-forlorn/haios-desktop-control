@@ -27,6 +27,9 @@ describe("B6 final-B5 composition boundary", () => {
         allowedProjects: { "operator-canary": "C:\\Workspace\\haios-operator-canary", "skill-fabric": "C:\\Workspace\\haios-skill-fabric",
           "hermes-os": "C:\\Workspace\\hermes-ai-operating-system-b6-canonical" },
       })).rejects.toThrow("B6_STAGE_ONE_AUTHENTICATED_PROOF_REQUIRED");
+      const direct = (core as Record<string, unknown>).createB6FinalB5OperatorRuntime as ((value: unknown) => Promise<unknown>);
+      await expect(direct({ stateRoot, worktreeRoot: win32.join(stateRoot, "worktrees"), stage: "HERMES_OS" }))
+        .rejects.toThrow("B6_STAGE_ONE_AUTHENTICATED_PROOF_REQUIRED");
     } finally {
       if (previous === undefined) delete process.env.LOCALAPPDATA; else process.env.LOCALAPPDATA = previous;
       await rm(root, { recursive: true, force: true });
