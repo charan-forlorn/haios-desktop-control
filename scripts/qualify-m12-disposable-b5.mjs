@@ -3,17 +3,13 @@ import { createHash } from "node:crypto";
 import { access, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { isAbsolute, join, relative, resolve, sep, win32 } from "node:path";
-import { fileURLToPath } from "node:url";
-
-import { dispatchOperatorControlTool } from "../dist/src/operator/control-runtime.js";
-import { M12_ACTIVE_CANARY_PROJECT_ROOT } from "../dist/src/operator/m12-active-canary-config.js";
-import { createM12DisposableB5FixtureRuntime } from "../dist/src/operator/m12-active-canary-runtime.js";
-import { LocalOperatorGit } from "../dist/src/operator/local-git.js";
-import { OPERATOR_V1_TOOL_NAMES } from "../dist/src/operator/protocol.js";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const RESULT_NAME = "m12-disposable-b5-result.json";
 const FIXTURE_MARKER = "HAIOS_M12_DISPOSABLE_B5_FIXTURE_R1\n";
+const OBSERVED_TOOL_DISPATCHES = new Set();
+let runtimeModules;
 
 function fail(code) { throw new Error(code); }
 function digest(value) { return createHash("sha256").update(value, "utf8").digest("hex"); }
@@ -21,7 +17,8 @@ function base64(value) { return Buffer.from(value, "utf8").toString("base64"); }
 async function exists(path) { try { await access(path); return true; } catch { return false; } }
 function samePath(left, right) { return win32.resolve(left).toLowerCase() === win32.resolve(right).toLowerCase(); }
 function isProtectedCanaryPath(candidate) {
-  const rel = win32.relative(win32.resolve(M12_ACTIVE_CANARY_PROJECT_ROOT), win32.resolve(candidate));
+  if (runtimeModules === undefined) fail("M12_DISPOSABLE_RUNTIME_NOT_PREPARED");
+  const rel = win32.relative(win32.resolve(runtimeModules.M12_ACTIVE_CANARY_PROJECT_ROOT), win32.resolve(candidate));
   return rel === "" || (rel !== ".." && !rel.startsWith(`..${win32.sep}`) && !win32.isAbsolute(rel));
 }
 function contained(base, candidate) {
@@ -37,13 +34,88 @@ function executeGit(args, cwd) {
   });
 }
 async function git(args, cwd) { return executeGit(args, cwd); }
+function executeFixed(command, args, cwd, label) {
+  return new Promise((resolveResult, rejectResult) => {
+    execFile(command, args, { cwd, windowsHide: true, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 }, (error, stdout, stderr) => {
+      if (error !== null) return rejectResult(new Error(`M12_DISPOSABLE_${label}_FAILED:${String(stderr)}`));
+      resolveResult(String(stdout));
+    });
+  });
+}
+async function deterministicTrackedSourceManifest() {
+  const listed = await git(["ls-files", "-z"], ROOT);
+  const files = listed.split("\0").filter(Boolean).sort();
+  const rows = [];
+  for (const rel of files) {
+    const bytes = await readFile(join(ROOT, rel));
+    rows.push(`${rel.replaceAll("\\", "/")}\t${createHash("sha256").update(bytes).digest("hex")}`);
+  }
+  const text = `${rows.join("\n")}\n`;
+  return Object.freeze({ sha256: digest(text), fileCount: files.length });
+}
+async function deterministicDirectoryDigest(root) {
+  const files = [];
+  async function visit(dir) {
+    for (const entry of await readdir(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) await visit(path);
+      else if (entry.isFile()) files.push(path);
+      else fail("M12_DISPOSABLE_COMPILED_OUTPUT_TYPE_DENIED");
+    }
+  }
+  await visit(root);
+  files.sort();
+  if (files.length === 0) fail("M12_DISPOSABLE_COMPILED_OUTPUT_EMPTY");
+  const rows = [];
+  for (const path of files) {
+    const rel = relative(root, path).split(sep).join("/");
+    rows.push(`${rel}\t${createHash("sha256").update(await readFile(path)).digest("hex")}`);
+  }
+  return Object.freeze({ sha256: digest(`${rows.join("\n")}\n`), fileCount: files.length });
+}
+async function prepareFreshRuntime() {
+  const headSha = await git(["rev-parse", "HEAD"], ROOT);
+  if (!/^[a-f0-9]{40}$/u.test(headSha)) fail("M12_DISPOSABLE_HEAD_INVALID");
+  const source = await deterministicTrackedSourceManifest();
+  const distRoot = join(ROOT, "dist");
+  await rm(distRoot, { recursive: true, force: true });
+  const tscCli = join(ROOT, "node_modules", "typescript", "bin", "tsc");
+  if (!(await exists(tscCli))) fail("M12_DISPOSABLE_BUILD_TOOL_MISSING");
+  await executeFixed(process.execPath, [tscCli, "--project", join(ROOT, "tsconfig.json")], ROOT, "FRESH_BUILD");
+  const compiled = await deterministicDirectoryDigest(distRoot);
+  const [control, config, active, localGit, protocol] = await Promise.all([
+    import(pathToFileURL(join(distRoot, "src", "operator", "control-runtime.js")).href),
+    import(pathToFileURL(join(distRoot, "src", "operator", "m12-active-canary-config.js")).href),
+    import(pathToFileURL(join(distRoot, "src", "operator", "m12-active-canary-runtime.js")).href),
+    import(pathToFileURL(join(distRoot, "src", "operator", "local-git.js")).href),
+    import(pathToFileURL(join(distRoot, "src", "operator", "protocol.js")).href),
+  ]);
+  runtimeModules = Object.freeze({
+    dispatchOperatorControlTool: control.dispatchOperatorControlTool,
+    M12_ACTIVE_CANARY_PROJECT_ROOT: config.M12_ACTIVE_CANARY_PROJECT_ROOT,
+    createM12DisposableB5FixtureRuntime: active.createM12DisposableB5FixtureRuntime,
+    LocalOperatorGit: localGit.LocalOperatorGit,
+    OPERATOR_V1_TOOL_NAMES: protocol.OPERATOR_V1_TOOL_NAMES,
+  });
+  return Object.freeze({ headSha, sourceManifestSha256: source.sha256, sourceFileCount: source.fileCount,
+    compiledOutputSha256: compiled.sha256, compiledFileCount: compiled.fileCount, freshBuild: true });
+}
+async function assertRuntimeProvenanceStable(provenance) {
+  const [headSha, source, compiled] = await Promise.all([
+    git(["rev-parse", "HEAD"], ROOT), deterministicTrackedSourceManifest(), deterministicDirectoryDigest(join(ROOT, "dist")),
+  ]);
+  if (headSha !== provenance.headSha || source.sha256 !== provenance.sourceManifestSha256
+    || source.fileCount !== provenance.sourceFileCount || compiled.sha256 !== provenance.compiledOutputSha256
+    || compiled.fileCount !== provenance.compiledFileCount) fail("M12_DISPOSABLE_RUNTIME_PROVENANCE_DRIFT");
+}
 function allow(result, label) {
   if (result.decision !== "ALLOW" || result.transaction === undefined) fail(`M12_DISPOSABLE_DISPATCH_DENIED:${label}:${result.reason ?? "UNKNOWN"}`);
   return result.transaction;
 }
 async function dispatch(runtime, name, args) {
-  const response = await dispatchOperatorControlTool(name, args, runtime);
+  const response = await runtimeModules.dispatchOperatorControlTool(name, args, runtime);
   if (response.capabilityClass === "UNKNOWN") fail(`M12_DISPOSABLE_UNKNOWN_TOOL:${name}`);
+  OBSERVED_TOOL_DISPATCHES.add(name);
   return response.result;
 }
 function parseArguments(argv) {
@@ -59,7 +131,7 @@ function parseArguments(argv) {
   const outputRoot = values.get("--output-root");
   if (typeof outputRoot !== "string" || !isAbsolute(outputRoot)) fail("M12_DISPOSABLE_OUTPUT_ROOT_DENIED");
   const root = resolve(outputRoot);
-  if (samePath(root, ROOT) || isProtectedCanaryPath(root)) fail("M12_DISPOSABLE_PROTECTED_ROOT_DENIED");
+  if (samePath(root, ROOT)) fail("M12_DISPOSABLE_PROTECTED_ROOT_DENIED");
   return Object.freeze({ runId: values.get("--run-id"), port, outputRoot: root });
 }
 async function reserveHighPort(port) {
@@ -80,6 +152,8 @@ async function initializeCanonical(fixtureRoot, canonical) {
   }, null, 2)}\n`, "utf8");
   await writeFile(join(canonical, "fixture.test.mjs"), "// mutable worktree JavaScript: qualification sandbox must never execute this file\n", "utf8");
   await writeFile(join(canonical, "fixture.txt"), "baseline\n", "utf8");
+  await writeFile(join(canonical, "surface-move.txt"), "move-me\n", "utf8");
+  await writeFile(join(canonical, "surface-remove.txt"), "remove-me\n", "utf8");
   await git(["add", "-A"], canonical);
   await git(["commit", "-m", "disposable baseline"], canonical);
 }
@@ -101,6 +175,8 @@ async function inspectOwnedResidue(fixtureRoot, fixtureRuntime) {
 }
 
 async function main() {
+  OBSERVED_TOOL_DISPATCHES.clear();
+  const provenance = await prepareFreshRuntime();
   const config = parseArguments(process.argv.slice(2));
   await mkdir(config.outputRoot, { recursive: true });
   if (isProtectedCanaryPath(config.outputRoot)) fail("M12_DISPOSABLE_PROTECTED_ROOT_DENIED");
@@ -111,16 +187,23 @@ async function main() {
   let result;
   try {
     await initializeCanonical(fixtureRoot, canonical);
-    const fixtureRuntime = await createM12DisposableB5FixtureRuntime({ fixtureRoot, canonicalRoot: canonical });
+    const fixtureRuntime = await runtimeModules.createM12DisposableB5FixtureRuntime({ fixtureRoot, canonicalRoot: canonical });
     const runtime = fixtureRuntime.runtime;
-    const gitApi = new LocalOperatorGit();
+    const gitApi = new runtimeModules.LocalOperatorGit();
     const initialHead = await gitApi.head(canonical);
-    const listedSurface = [...OPERATOR_V1_TOOL_NAMES];
+    const listedSurface = [...runtimeModules.OPERATOR_V1_TOOL_NAMES];
     const status = await dispatch(runtime, "operator_status", {});
     const capabilities = await dispatch(runtime, "operator_capabilities", {});
-    const exactToolSurface = listedSurface.length === OPERATOR_V1_TOOL_NAMES.length && listedSurface.every((name, index) => name === OPERATOR_V1_TOOL_NAMES[index]);
     const authorityExpanded = !(status.mode === "ACTIVE" && status.mutationActive === true && status.destructive === "LOCKED"
       && capabilities.s2Enabled === false && capabilities.genericExec === false && capabilities.genericShell === false);
+
+    const surface = allow(await dispatch(runtime, "operator_begin_transaction", { projectId: "operator-canary", canonicalRoot: canonical }), "surface.begin");
+    const surfaceMoveBytes = await readFile(join(surface.worktreePath, "surface-move.txt"), "utf8");
+    const surfaceRemoveBytes = await readFile(join(surface.worktreePath, "surface-remove.txt"), "utf8");
+    allow(await dispatch(runtime, "operator_stage_move", { txId: surface.txId, fromRel: "surface-move.txt", toRel: "surface-moved.txt", preimageSha256: digest(surfaceMoveBytes) }), "surface.move");
+    allow(await dispatch(runtime, "operator_stage_remove", { txId: surface.txId, relPath: "surface-remove.txt", preimageSha256: digest(surfaceRemoveBytes) }), "surface.remove");
+    const surfaceRollback = await dispatch(runtime, "operator_rollback_transaction", { txId: surface.txId });
+    if (surfaceRollback.decision !== "ALLOW" || surfaceRollback.state !== "ROLLED_BACK") fail("M12_DISPOSABLE_SURFACE_ROLLBACK_DENIED");
 
     const benign = allow(await dispatch(runtime, "operator_begin_transaction", { projectId: "operator-canary", canonicalRoot: canonical }), "benign.begin");
     const benignHead = await gitApi.head(canonical); const benignBytes = await readFile(join(canonical, "fixture.txt"), "utf8");
@@ -256,12 +339,16 @@ async function main() {
     });
     const allPatternsPassed = Object.values(patterns).every((pattern) => pattern.passed);
     const zeroOwnedResidue = residue.totalOwnedResidue === 0;
+    const observedToolDispatches = Object.freeze(listedSurface.filter((name) => OBSERVED_TOOL_DISPATCHES.has(name)));
+    const exactToolSurface = observedToolDispatches.length === listedSurface.length && OBSERVED_TOOL_DISPATCHES.size === listedSurface.length;
+    await assertRuntimeProvenanceStable(provenance);
     result = Object.freeze({
       schema: "HAIOS_M12_DISPOSABLE_B5_QUALIFICATION_R1", runId: config.runId,
+      provenance,
       fixture: Object.freeze({ kind: "DISPOSABLE_GIT_CANONICAL", canonicalRoot: canonical, port: config.port, portProbe: "loopback-reserved-and-released", prohibitedPortsUsed: config.port === 8768 || config.port === 8769, initialHead }),
-      authority: Object.freeze({ exactToolSurface: listedSurface, exactToolSurfacePassed: exactToolSurface, authorityExpanded, genericExec: capabilities.genericExec, genericShell: capabilities.genericShell, s2Enabled: capabilities.s2Enabled, remoteGitMutation: false, modelGeneratedCommands: false, fixedRecipesOnly: true, runtimeProvenance: "M12_DISPOSABLE_B5_FIXTURE_CORE" }),
+      authority: Object.freeze({ exactToolSurface: listedSurface, observedToolDispatches, exactToolSurfacePassed: exactToolSurface, authorityExpanded, genericExec: capabilities.genericExec, genericShell: capabilities.genericShell, s2Enabled: capabilities.s2Enabled, remoteGitMutation: false, modelGeneratedCommands: false, fixedRecipesOnly: true, runtimeProvenance: "M12_DISPOSABLE_B5_FIXTURE_CORE" }),
       patterns, residue,
-      normalized: Object.freeze({ schema: "HAIOS_M12_DISPOSABLE_B5_QUALIFICATION_R1", allPatternsPassed, correction: [correctionTask.taskId, correctionCheckpoint.checkpointId !== undefined, patterns.correctionPromotion.ffOnly, patterns.correctionPromotion.casBound], stale: patterns.staleCas.deniedReason, remediation: patterns.autonomousRemediation.directives, recovery: patterns.lockEffectRecovery.foreignRecovery, zeroOwnedResidue, authorityExpanded, exactToolSurface }),
+      normalized: Object.freeze({ schema: "HAIOS_M12_DISPOSABLE_B5_QUALIFICATION_R1", provenance: [provenance.headSha, provenance.sourceManifestSha256, provenance.compiledOutputSha256], allPatternsPassed, correction: [correctionTask.taskId, correctionCheckpoint.checkpointId !== undefined, patterns.correctionPromotion.ffOnly, patterns.correctionPromotion.casBound], stale: patterns.staleCas.deniedReason, remediation: patterns.autonomousRemediation.directives, recovery: patterns.lockEffectRecovery.foreignRecovery, zeroOwnedResidue, authorityExpanded, exactToolSurface }),
     });
   } finally { await rm(fixtureRoot, { recursive: true, force: true }); }
   if (result === undefined || !result.normalized.allPatternsPassed || !result.normalized.zeroOwnedResidue || result.normalized.authorityExpanded || !result.normalized.exactToolSurface) fail(`M12_DISPOSABLE_RESULT_DENIED:${JSON.stringify({ normalized: result?.normalized, patterns: result?.patterns, residue: result?.residue })}`);

@@ -46,6 +46,30 @@ describe("M12 disposable B5 qualification evidence provenance", () => {
     expect(text).not.toContain('"transaction.begin"');
   });
 
+  it("cryptographically binds the result to the current committed source and exact freshly built runtime bytes", async () => {
+    const head = (await execFileAsync("git", ["rev-parse", "HEAD"], {
+      cwd: process.cwd(), windowsHide: true,
+    })).stdout.trim();
+
+    expect(result.provenance).toMatchObject({
+      headSha: head,
+      sourceManifestSha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      compiledOutputSha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      freshBuild: true,
+    });
+    expect(result.provenance.compiledFileCount).toBeGreaterThan(0);
+  });
+
+  it("derives exact tool-surface PASS from thirteen unique observed public dispatches", () => {
+    const observed = result.authority.observedToolDispatches as string[];
+
+    expect(observed).toEqual(OPERATOR_V1_TOOL_NAMES);
+    expect(new Set(observed).size).toBe(13);
+    expect(observed).toContain("operator_stage_move");
+    expect(observed).toContain("operator_stage_remove");
+    expect(result.authority.exactToolSurfacePassed).toBe(true);
+  });
+
   it("rejects the protected canary root and every canonical Windows descendant before fixture creation", async () => {
     const text = await source();
 
