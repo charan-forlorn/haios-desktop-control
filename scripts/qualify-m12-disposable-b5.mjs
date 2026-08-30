@@ -88,9 +88,11 @@ async function prepareFreshRuntime() {
   const tscCli = join(ROOT, "node_modules", "typescript", "bin", "tsc");
   if (!(await exists(tscCli))) fail("M12_DISPOSABLE_BUILD_TOOL_MISSING");
   await executeFixed(process.execPath, [tscCli, "--project", join(ROOT, "tsconfig.json"), "--outDir", distRoot], ROOT, "FRESH_BUILD");
+  await mkdir(join(distRoot, "scripts"), { recursive: true });
   await Promise.all([
     copyFile(join(ROOT, "task-registry.m07.json"), join(distRoot, "task-registry.m07.json")),
     copyFile(join(ROOT, "task-effects.m07.json"), join(distRoot, "task-effects.m07.json")),
+    copyFile(join(ROOT, "scripts", "m12-disposable-b5-fixed-runner.mjs"), join(distRoot, "scripts", "m12-disposable-b5-fixed-runner.mjs")),
   ]);
   const compiled = await deterministicDirectoryDigest(distRoot);
   const [control, config, active, localGit, protocol] = await Promise.all([
@@ -194,9 +196,11 @@ async function main() {
   await mkdir(config.outputRoot, { recursive: true });
   if (isProtectedCanaryPath(config.outputRoot)) fail("M12_DISPOSABLE_PROTECTED_ROOT_DENIED");
   await reserveHighPort(config.port);
-  const fixtureRoot = join(ROOT, "runtime", "m12-disposable-b5", config.runId);
+  if (runtimeDistRoot === undefined) fail("M12_DISPOSABLE_RUNTIME_NOT_PREPARED");
+  const fixtureBase = join(runtimeDistRoot, "runtime", "m12-disposable-b5");
+  const fixtureRoot = join(fixtureBase, config.runId);
   const canonical = join(fixtureRoot, "canonical");
-  if (!contained(join(ROOT, "runtime", "m12-disposable-b5"), fixtureRoot) || isProtectedCanaryPath(fixtureRoot)) fail("M12_DISPOSABLE_PROTECTED_ROOT_DENIED");
+  if (!contained(fixtureBase, fixtureRoot) || isProtectedCanaryPath(fixtureRoot)) fail("M12_DISPOSABLE_PROTECTED_ROOT_DENIED");
   let result;
   try {
     await initializeCanonical(fixtureRoot, canonical);
@@ -248,7 +252,7 @@ async function main() {
     allow(await dispatch(runtime, "operator_apply_transaction", { txId: isolation.txId }), "isolation.apply");
     const isolationTask = await dispatch(runtime, "operator_run_task", { txId: isolation.txId, taskId: "project.test", params: {} });
     const maliciousWorktreeJsNeverExecuted = !(await exists(hostEscapeMarker));
-    const fixedRunnerPath = join(ROOT, "scripts", "m12-disposable-b5-fixed-runner.mjs");
+    const fixedRunnerPath = join(runtimeDistRoot, "scripts", "m12-disposable-b5-fixed-runner.mjs");
     const fixedRunnerOutsideWorktree = !contained(isolation.worktreePath, fixedRunnerPath);
     const runnerArgumentsProtected = [join(isolation.worktreePath, "fixture-state.json"), join(isolation.worktreePath, "coverage", "qualification-artifact.txt")].some(isProtectedCanaryPath);
     const isolationRollback = await dispatch(runtime, "operator_rollback_transaction", { txId: isolation.txId });

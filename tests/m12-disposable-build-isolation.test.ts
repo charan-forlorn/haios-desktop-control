@@ -13,6 +13,9 @@ describe("M12 disposable build isolation", () => {
     expect(source).toContain('copyFile(join(ROOT, "task-registry.m07.json"), join(distRoot, "task-registry.m07.json"))');
     expect(source).toContain('copyFile(join(ROOT, "task-effects.m07.json"), join(distRoot, "task-effects.m07.json"))');
     expect(source).toContain("runtimeDistRoot");
+    expect(source).toContain('copyFile(join(ROOT, "scripts", "m12-disposable-b5-fixed-runner.mjs")');
+    expect(source).toContain('const fixtureBase = join(runtimeDistRoot, "runtime", "m12-disposable-b5")');
+    expect(source).toContain('const fixedRunnerPath = join(runtimeDistRoot, "scripts", "m12-disposable-b5-fixed-runner.mjs")');
     expect(source).not.toContain('const distRoot = join(ROOT, "dist")');
     expect(source).not.toContain('deterministicDirectoryDigest(join(ROOT, "dist"))');
   });
