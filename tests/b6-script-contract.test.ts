@@ -53,13 +53,28 @@ describe("B6 staged activation helper boundaries", () => {
     const preflight = await readFile(join(process.cwd(), "scripts", "preflight-b6-project-expansion.ps1"), "utf8");
     const live = await readFile(join(process.cwd(), "scripts", "qualify-b6-live-stage.mjs"), "utf8");
     expect(preflight).toContain("qualify-b6-live-stage.mjs");
-    expect(preflight.indexOf("qualify-b6-live-stage.mjs")).toBeLessThan(preflight.indexOf("$evidence=Read-JsonObject $EvidencePath"));
+    expect(preflight.indexOf("qualify-b6-live-stage.mjs")).toBeLessThan(preflight.indexOf("Assert-LiveEvidence $stagedEvidence"));
     for (const marker of ["StreamableHTTPClientTransport", "X-API-Key", "operator_begin_transaction", "operator_stage_create", "operator_validate_transaction",
       "operator_apply_transaction", "operator_run_task", "node.test.run", "operator_rollback_transaction", "stage1-live-qualification.json"]) expect(live).toContain(marker);
   });
   it("proves the connected server actually admits the stage target and rolls the probe transaction back", async () => {
     const probe = await readFile(join(process.cwd(), "scripts", "probe-b6-project-expansion-host.mjs"), "utf8");
     for (const marker of ["target_admitted", "operator_rollback_transaction", "hermes-os", "skill-fabric", "transaction.txId"]) expect(probe).toContain(marker);
+  });
+  it("preserves an existing Stage-1 evidence artifact until a fresh replacement is validated", async () => {
+    const preflight = await readFile(join(process.cwd(), "scripts", "preflight-b6-project-expansion.ps1"), "utf8");
+    expect(preflight).not.toContain("Remove-Item -LiteralPath $EvidencePath");
+    for (const marker of ["$stagedEvidencePath", "[IO.File]::Replace", "[IO.File]::Move", "Assert-LiveEvidence $stagedEvidence"]) expect(preflight).toContain(marker);
+  });
+  it("implements live Stage-2 qualification and durable stage/final seal artifacts", async () => {
+    const live = await readFile(join(process.cwd(), "scripts", "qualify-b6-live-stage.mjs"), "utf8");
+    const qualify = await readFile(join(process.cwd(), "scripts", "qualify-b6-stage.ps1"), "utf8");
+    const sealStage = await readFile(join(process.cwd(), "scripts", "seal-b6-stage.mjs"), "utf8");
+    const sealFinal = await readFile(join(process.cwd(), "scripts", "seal-b6-final.mjs"), "utf8");
+    for (const marker of ["HERMES_OS", "stage2-live-qualification.json", "skillFabricRegression", "operatorCanaryRegression", "wrongRootDenied"]) expect(live).toContain(marker);
+    for (const marker of ["HAIOS_DESKTOP_CONTROL_PLANE_R1_B6_HERMES_OS_ADMISSION_QUALIFIED", "stage2-final-certification.json", "B6_STAGE_TWO_CERTIFICATION_CURRENT"]) expect(qualify).toContain(marker);
+    for (const marker of ["stage1-evidence-bindings.json", "SHA256SUMS.stage1.txt", "stage1-final-seal.json", "stage1-final-certification.sha256", "stage2-final-seal.json"]) expect(sealStage).toContain(marker);
+    for (const marker of ["HAIOS_DESKTOP_CONTROL_PLANE_R1_B6_PROJECT_EXPANSION_QUALIFIED", "b6-final-certification.json", "b6-final-seal.json", "SHA256SUMS.final.txt"]) expect(sealFinal).toContain(marker);
   });
   it("keeps live activation and rollback recovery-first and non-destructive in this source lane", async () => {
     const sources = await Promise.all(scripts.slice(2).map((name) => readFile(join(process.cwd(), "scripts", name), "utf8")));
