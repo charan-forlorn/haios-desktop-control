@@ -63,6 +63,29 @@ describe("M12 preserved-state verifier", () => {
     }
   });
 
+  it("classifies only exact inert activation-owned partial state when the preimage was absent", async () => {
+    const f = await fixture();
+    const mod = await import(pathToFileURL(verifierPath).href);
+    await rm(join(f.root, "leases"), { recursive: true, force: true });
+    await rm(join(f.root, "transaction-recovery"), { recursive: true, force: true });
+    await rm(join(f.root, "remediation"), { recursive: true, force: true });
+    await expect(mod.inspectM12ActivationOwnedPartialState(f.root, { canaryRoot: f.canaryRoot, apiKeyFile: f.apiKeyFile }))
+      .resolves.toMatchObject({ status: "ACTIVATION_OWNED_PARTIAL", cleanupSafe: true, resourceResidueCount: 0 });
+  });
+
+  it("fails closed when absent-preimage partial state contains unknown or nonempty owned directories", async () => {
+    const mod = await import(pathToFileURL(verifierPath).href);
+    const unknown = await fixture(); await writeFile(join(unknown.root, "foreign.txt"), "foreign\n", "utf8");
+    await expect(mod.inspectM12ActivationOwnedPartialState(unknown.root, { canaryRoot: unknown.canaryRoot, apiKeyFile: unknown.apiKeyFile }))
+      .rejects.toThrow("M12_PRESERVED_STATE_RECONCILIATION_REQUIRED");
+    const nonempty = await fixture(); await writeFile(join(nonempty.root, "leases", "foreign.json"), "{}\n", "utf8");
+    await expect(mod.inspectM12ActivationOwnedPartialState(nonempty.root, { canaryRoot: nonempty.canaryRoot, apiKeyFile: nonempty.apiKeyFile }))
+      .rejects.toThrow("M12_PRESERVED_STATE_RECONCILIATION_REQUIRED");
+    const remediation = await fixture(); await writeEpisode(remediation.root);
+    await expect(mod.inspectM12ActivationOwnedPartialState(remediation.root, { canaryRoot: remediation.canaryRoot, apiKeyFile: remediation.apiKeyFile }))
+      .rejects.toThrow("M12_PRESERVED_STATE_RECONCILIATION_REQUIRED");
+  });
+
   it("fails closed on tampered or pending-replan remediation state", async () => {
     const mod = await import(pathToFileURL(verifierPath).href);
     const tampered = await fixture(); const record = await writeEpisode(tampered.root);

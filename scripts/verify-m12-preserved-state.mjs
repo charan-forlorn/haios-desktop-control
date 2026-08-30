@@ -43,6 +43,45 @@ function validateRecord(record, filename) {
   if (sha(snapshot) !== record.hash) deny();
 }
 
+function validateHostConfig(config, stateRoot, canaryRoot, apiKeyFile) {
+  const configKeys = ["activationScope","allowedProjects","apiKeyFile","mode","port","stateRoot","worktreeRoot"].sort();
+  if (!exactKeys(config, configKeys) || config.port !== 8769 || config.mode !== "ACTIVE" || config.activationScope !== "M12_B5_CANARY_STABILITY_ONLY") deny();
+  if (!samePath(config.stateRoot, stateRoot) || !samePath(config.worktreeRoot, join(stateRoot, "worktrees")) || !samePath(config.apiKeyFile, apiKeyFile)) deny();
+  if (!exactKeys(config.allowedProjects, ["operator-canary"]) || !samePath(config.allowedProjects["operator-canary"], canaryRoot)) deny();
+}
+
+export async function inspectM12ActivationOwnedPartialState(stateRootInput, expectations) {
+  if (typeof stateRootInput !== "string" || typeof expectations !== "object" || expectations === null) deny();
+  const stateRoot = resolve(stateRootInput); const { canaryRoot, apiKeyFile } = expectations;
+  if (typeof canaryRoot !== "string" || typeof apiKeyFile !== "string") deny();
+  const rootStat = await lstat(stateRoot).catch((error) => error?.code === "ENOENT" ? undefined : deny());
+  if (rootStat === undefined) {
+    const summary = { status: "ABSENT", cleanupSafe: true, resourceResidueCount: 0, configPresent: false, presentDirectories: [] };
+    return Object.freeze({ ...summary, digest: sha(summary) });
+  }
+  await regular(stateRoot, true);
+  const top = await readdir(stateRoot, { withFileTypes: true });
+  if (top.some((entry) => !TOP.has(entry.name))) deny();
+  const presentDirectories = [];
+  let resourceResidueCount = 0;
+  for (const name of ["worktrees", "leases", "transaction-recovery", "remediation"]) {
+    const path = join(stateRoot, name); const st = await lstat(path).catch((error) => error?.code === "ENOENT" ? undefined : deny());
+    if (st === undefined) continue;
+    await regular(path, true); presentDirectories.push(name);
+    const entries = await readdir(path); resourceResidueCount += entries.length;
+    if (entries.length !== 0) deny();
+  }
+  const configPath = join(stateRoot, "host-config.json");
+  const configStat = await lstat(configPath).catch((error) => error?.code === "ENOENT" ? undefined : deny());
+  let configPresent = false;
+  if (configStat !== undefined) {
+    await regular(configPath); const config = JSON.parse(await readFile(configPath, "utf8"));
+    validateHostConfig(config, stateRoot, canaryRoot, apiKeyFile); configPresent = true;
+  }
+  const summary = { status: "ACTIVATION_OWNED_PARTIAL", cleanupSafe: true, resourceResidueCount, configPresent, presentDirectories: presentDirectories.sort() };
+  return Object.freeze({ ...summary, digest: sha(summary) });
+}
+
 export async function inspectM12PreservedState(stateRootInput, expectations) {
   if (typeof stateRootInput !== "string" || typeof expectations !== "object" || expectations === null) deny();
   const stateRoot = resolve(stateRootInput); const { canaryRoot, apiKeyFile } = expectations;
@@ -63,10 +102,7 @@ export async function inspectM12PreservedState(stateRootInput, expectations) {
   if (resourceResidueCount !== 0) deny();
   const configPath = join(stateRoot, "host-config.json"); await regular(configPath);
   const config = JSON.parse(await readFile(configPath, "utf8"));
-  const configKeys = ["activationScope","allowedProjects","apiKeyFile","mode","port","stateRoot","worktreeRoot"].sort();
-  if (!exactKeys(config, configKeys) || config.port !== 8769 || config.mode !== "ACTIVE" || config.activationScope !== "M12_B5_CANARY_STABILITY_ONLY") deny();
-  if (!samePath(config.stateRoot, stateRoot) || !samePath(config.worktreeRoot, join(stateRoot, "worktrees")) || !samePath(config.apiKeyFile, apiKeyFile)) deny();
-  if (!exactKeys(config.allowedProjects, ["operator-canary"]) || !samePath(config.allowedProjects["operator-canary"], canaryRoot)) deny();
+  validateHostConfig(config, stateRoot, canaryRoot, apiKeyFile);
   const remediationDir = join(stateRoot, "remediation"); const names = await readdir(remediationDir);
   const records = [];
   for (const filename of names.sort()) {
@@ -83,7 +119,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   try {
     const local = process.env.LOCALAPPDATA; if (!local) deny();
     const stateRoot = join(local, "HAIOS", "M12");
-    const result = await inspectM12PreservedState(stateRoot, { canaryRoot: "C:\\Workspace\\haios-operator-canary", apiKeyFile: join(local, "HAIOS", "M10", "operator-api-key") });
+    const expectations = { canaryRoot: "C:\\Workspace\\haios-operator-canary", apiKeyFile: join(local, "HAIOS", "M10", "operator-api-key") };
+    const result = process.argv.includes("--activation-partial")
+      ? await inspectM12ActivationOwnedPartialState(stateRoot, expectations)
+      : await inspectM12PreservedState(stateRoot, expectations);
     process.stdout.write(`${JSON.stringify(result)}\n`);
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : M12_PRESERVED_STATE_RECONCILIATION_REQUIRED}\n`); process.exitCode = 2;

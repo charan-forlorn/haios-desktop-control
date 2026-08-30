@@ -132,11 +132,30 @@ describe("M12 sealed B5 activation transaction", () => {
     for (const source of [preflight, execute, rollback]) expect(source).toContain("verify-m12-preserved-state.mjs");
     expect(rollback).not.toContain("Remove-Item -LiteralPath $StateRoot -Recurse -Force");
     expect(rollback).toContain("M12_STATE_RECONCILIATION_REQUIRED");
-    expect(rollback).toContain("m12_state_preserved=$true");
+    expect(rollback).toContain("m12_state_preserved=$m12StatePreserved");
     expect(execute).not.toContain('if(Test-Path -LiteralPath $StateRoot){AuthorityFail "M12_STATE_COLLISION"}');
     expect(execute).toContain("preserved_state_digest");
     expect(preflight).toContain("preserved_state_digest");
   });
+  it("rolls back absent-preimage partial M12 state with exact non-recursive cleanup only", async () => {
+    const [, execute, rollback] = await sources();
+    expect(execute).toContain('foreach($name in @("worktrees","leases","transaction-recovery","remediation"))');
+    expect(execute).toContain("M12_STATE_LAYOUT_READY");
+    expect(rollback).toContain("--activation-partial");
+    expect(rollback).toContain('$preimageStatus -eq "ABSENT"');
+    expect(rollback).toContain("M12_PARTIAL_STATE_OWNERSHIP_REQUIRED");
+    expect(rollback).toContain("M12_PARTIAL_STATE_CLEANUP_COMPLETE");
+    expect(rollback).not.toContain("Remove-Item -LiteralPath $StateRoot -Recurse -Force");
+    expect(rollback).toContain("Remove-Item -LiteralPath $StateRoot");
+  });
+
+  it("never deletes verified preserved state during rollback", async () => {
+    const [, , rollback] = await sources();
+    expect(rollback).toContain('$preimageStatus -eq "VERIFIED_PRESERVED"');
+    expect(rollback).toContain("M12_PRESERVED_STATE_RETAINED");
+    expect(rollback).toContain("m12_state_preserved=$m12StatePreserved");
+  });
+
   it("keeps all three PowerShell transaction scripts parse-clean", () => {
     for (const path of [preflightPath, executePath, rollbackPath]) {
       const command = ["$tokens=$null;$errors=$null;", `[System.Management.Automation.Language.Parser]::ParseFile('${path.replaceAll("'", "''")}',[ref]$tokens,[ref]$errors)|Out-Null;`, "if($errors.Count -gt 0){$errors|ForEach-Object{Write-Error $_.Message};exit 1}"].join("");

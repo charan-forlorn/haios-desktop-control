@@ -44,14 +44,37 @@ do{Start-Sleep -Milliseconds 500;$oldNativeErrorPreference=$PSNativeCommandUseEr
 if(-not $restored){Block "M11_ACTIVE_RESTORE_FAILED"}
 $canaryBranch=(& git.exe -C $CanaryRoot branch --show-current).Trim();$canaryHead=(& git.exe -C $CanaryRoot rev-parse HEAD).Trim();$canaryStatus=(& git.exe -C $CanaryRoot status --porcelain);if($LASTEXITCODE -ne 0 -or $canaryBranch -ne $ExpectedCanaryBranch -or $canaryBranch -ne [string]$Envelope.canary_branch -or $canaryHead -ne [string]$Envelope.canary_head -or $canaryStatus.Length -ne 0){Block "M12_ROLLBACK_CANARY_PREIMAGE_DRIFT"}
 if(-not(Test-Path -LiteralPath $StateVerifier) -or (Get-Sha256 $StateVerifier) -ne [string]$Envelope.state_verifier_sha256){Block "M12_STATE_RECONCILIATION_REQUIRED"}
+$preimageStatus=[string]$Envelope.preserved_state_status
 $oldNativeErrorPreference=$PSNativeCommandUseErrorActionPreference;$PSNativeCommandUseErrorActionPreference=$false
-try{$stateRaw=& "C:\Program Files\nodejs\node.exe" $StateVerifier 2>$null;$stateExit=$LASTEXITCODE}finally{$PSNativeCommandUseErrorActionPreference=$oldNativeErrorPreference}
+try{
+  if($preimageStatus -eq "ABSENT"){$stateRaw=& "C:\Program Files\nodejs\node.exe" $StateVerifier --activation-partial 2>$null}
+  elseif($preimageStatus -eq "VERIFIED_PRESERVED"){$stateRaw=& "C:\Program Files\nodejs\node.exe" $StateVerifier 2>$null}
+  else{Block "M12_STATE_RECONCILIATION_REQUIRED"}
+  $stateExit=$LASTEXITCODE
+}finally{$PSNativeCommandUseErrorActionPreference=$oldNativeErrorPreference}
 if($stateExit -ne 0 -or -not $stateRaw){Block "M12_STATE_RECONCILIATION_REQUIRED"};$stateProof=($stateRaw -join "`n")|ConvertFrom-Json
-if([string]$stateProof.status -notin @("ABSENT","VERIFIED_PRESERVED")){Block "M12_STATE_RECONCILIATION_REQUIRED"}
+if($preimageStatus -eq "ABSENT"){
+  if([string]$stateProof.status -notin @("ABSENT","ACTIVATION_OWNED_PARTIAL") -or $stateProof.cleanupSafe -ne $true){Block "M12_PARTIAL_STATE_OWNERSHIP_REQUIRED"}
+} elseif($preimageStatus -eq "VERIFIED_PRESERVED") {
+  if([string]$stateProof.status -ne "VERIFIED_PRESERVED"){Block "M12_STATE_RECONCILIATION_REQUIRED"}
+} else {Block "M12_STATE_RECONCILIATION_REQUIRED"}
 $m12TaskObject=Get-ScheduledTask -TaskName $M12Task -ErrorAction SilentlyContinue;if($m12TaskObject){Unregister-ScheduledTask -TaskName $M12Task -Confirm:$false}
 if(Test-Path -LiteralPath $DeploymentRoot){& git.exe -C $Root worktree remove --force $DeploymentRoot;if($LASTEXITCODE -ne 0 -or (Test-Path -LiteralPath $DeploymentRoot)){Block "M12_DEPLOYMENT_REMOVE_FAILED"}}
-$m12StatePreserved=Test-Path -LiteralPath $StateRoot
+if($preimageStatus -eq "ABSENT"){
+  if(Test-Path -LiteralPath $StateRoot){
+    $configPath=Join-Path $StateRoot "host-config.json";if(Test-Path -LiteralPath $configPath){Remove-Item -LiteralPath $configPath -Force}
+    foreach($name in @("worktrees","leases","transaction-recovery","remediation")){$path=Join-Path $StateRoot $name;if(Test-Path -LiteralPath $path){if(@(Get-ChildItem -LiteralPath $path -Force).Count -ne 0){Block "M12_PARTIAL_STATE_OWNERSHIP_REQUIRED"};Remove-Item -LiteralPath $path}}
+    if(@(Get-ChildItem -LiteralPath $StateRoot -Force).Count -ne 0){Block "M12_PARTIAL_STATE_OWNERSHIP_REQUIRED"};Remove-Item -LiteralPath $StateRoot
+  }
+  Write-Host "M12_PARTIAL_STATE_CLEANUP_COMPLETE";$m12StatePreserved=$false
+  $oldNativeErrorPreference=$PSNativeCommandUseErrorActionPreference;$PSNativeCommandUseErrorActionPreference=$false
+  try{$stateRaw=& "C:\Program Files\nodejs\node.exe" $StateVerifier 2>$null;$stateExit=$LASTEXITCODE}finally{$PSNativeCommandUseErrorActionPreference=$oldNativeErrorPreference}
+  if($stateExit -ne 0 -or -not $stateRaw){Block "M12_STATE_RECONCILIATION_REQUIRED"};$stateProof=($stateRaw -join "`n")|ConvertFrom-Json
+  if([string]$stateProof.status -ne "ABSENT"){Block "M12_STATE_RECONCILIATION_REQUIRED"}
+} else {
+  Write-Host "M12_PRESERVED_STATE_RETAINED";$m12StatePreserved=$true
+}
 if((Get-ContainerDigest $DedicatedTunnel) -ne [string]$Envelope.dedicated_tunnel_sha256 -or (Get-ContainerDigest $SharedTunnel) -ne [string]$Envelope.shared_tunnel_sha256){Block "TUNNEL_DIGEST_DRIFT"};$dedicated=(& docker.exe inspect $DedicatedTunnel|ConvertFrom-Json)[0];if(-not((@($dedicated.Args)-join ' ').Contains($ExpectedTunnelRoute))){Block "DEDICATED_ROUTE_DRIFT"};if((@(Get-ListenerIdentity $SecurePort)-join ',') -ne (@($Envelope.listener_8768)-join ',')){Block "SECURE_8768_DRIFT"}
-$result=[ordered]@{terminal="HAIOS_DESKTOP_CONTROL_PLANE_R1_M12_ROLLED_BACK_TO_CERTIFIED_M11_ACTIVE_CANARY";m11_task=$M11Task;m11_mode="ACTIVE";m10_api_key_rotated=$false;canary_root=$CanaryRoot;canary_head=[string]$Envelope.canary_head;tunnel_route=$ExpectedTunnelRoute;listener_8768=@(Get-ListenerIdentity $SecurePort);m12_state_preserved=$true;preserved_state_status=[string]$stateProof.status;preserved_state_digest=[string]$stateProof.digest};Write-JsonNoBom (Join-Path $EvidenceRoot "m12-rollback-result.json") $result
+$result=[ordered]@{terminal="HAIOS_DESKTOP_CONTROL_PLANE_R1_M12_ROLLED_BACK_TO_CERTIFIED_M11_ACTIVE_CANARY";m11_task=$M11Task;m11_mode="ACTIVE";m10_api_key_rotated=$false;canary_root=$CanaryRoot;canary_head=[string]$Envelope.canary_head;tunnel_route=$ExpectedTunnelRoute;listener_8768=@(Get-ListenerIdentity $SecurePort);m12_state_preserved=$m12StatePreserved;preserved_state_status=[string]$stateProof.status;preserved_state_digest=[string]$stateProof.digest};Write-JsonNoBom (Join-Path $EvidenceRoot "m12-rollback-result.json") $result
 [IO.File]::AppendAllText($ExecutionJournal,((([ordered]@{utc=[DateTime]::UtcNow.ToString('o');event="M12_ROLLBACK_M11_RESTORED"})|ConvertTo-Json -Compress)+"`n"),[Text.UTF8Encoding]::new($false))
 Write-Host "M12_ROLLBACK_M11_RESTORED";Write-Host "HAIOS_DESKTOP_CONTROL_PLANE_R1_M12_ROLLED_BACK_TO_CERTIFIED_M11_ACTIVE_CANARY"
