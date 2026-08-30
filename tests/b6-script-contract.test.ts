@@ -97,15 +97,16 @@ describe("B6 staged activation helper boundaries", () => {
     expect(launcher).toContain("const prepared = JSON.parse(preparedProcess.stdout.trim()");
     expect(launcher).not.toContain("const build = JSON.parse(prepared.stdout");
     const buildVerifyCalls = [...launcher.matchAll(/verifyPreparedB6RuntimeBuild\(prepared\)/gu)].map((match) => match.index ?? -1);
-    const runtimeImport = launcher.indexOf("await import(");
-    expect(buildVerifyCalls).toHaveLength(2);
-    expect(buildVerifyCalls[0]).toBeLessThan(runtimeImport);
-    expect(buildVerifyCalls[1]).toBeGreaterThan(runtimeImport);
+    const executionDigest = launcher.indexOf("const executionDigest = await compiledDigest(executionRoot)");
+    const runtimeImport = launcher.indexOf("await import(pathToFileURL(join(executionRoot");
+    expect(buildVerifyCalls).toHaveLength(1);
+    expect(buildVerifyCalls[0]).toBeLessThan(executionDigest);
+    expect(executionDigest).toBeLessThan(runtimeImport);
     for (const marker of ["--outDir", "mkdtemp", "runtime", "task-registry.m07.json", "task-effects.m07.json", "candidateManifestSha256", "compiledOutputSha256", "B6_RUNTIME_SOURCE_CHANGED_DURING_BUILD"]) expect(prepare).toContain(marker);
     for (const marker of ["independentlyRebuildCurrentRuntime", "prepare-b6-runtime-build.mjs", "B6_RUNTIME_BUILD_REPRODUCTION_FAILED", "verifier.buildRoot"]) expect(attestation).toContain(marker);
-    expect(attestation).toContain('join(verifier.buildRoot, "src", "operator", "host-runtime-config.js")');
-    expect(attestation).toContain('join(verifier.buildRoot, "src", "operator", "protocol.js")');
-    expect(attestation).not.toContain('join(buildRoot, "src", "operator", "host-runtime-config.js")');
+    expect(attestation).toContain('join(buildRoot, "src", "operator", "host-runtime-config.js")');
+    expect(attestation).toContain('join(buildRoot, "src", "operator", "protocol.js")');
+    expect(attestation).not.toContain('join(verifier.buildRoot, "src", "operator", "host-runtime-config.js")');
   });
   it("stage and final sealing validate canonical artifacts against current repository facts before issuing seals", async () => {
     const stageSeal = await readFile(join(process.cwd(), "scripts", "seal-b6-stage.mjs"), "utf8");
@@ -114,7 +115,16 @@ describe("B6 staged activation helper boundaries", () => {
     for (const marker of ["stage1-final-certification.json", "stage2-final-certification.json", "stage1-live-qualification.json", "stage2-live-qualification.json",
       "liveQualificationEvidenceSha256", "effectPolicyVerified", "rollbackRecoveryClassification", "hermesOsDenied", "skillFabricRegression", "operatorCanaryRegression", "wrongRootDenied", "unknownProjectDenied", "stageOneSealSha256", "stageTwoSealSha256", "B6_FINAL_ARTIFACT_PATH_DENIED"]) expect(finalSeal).toContain(marker);
   });
-  it("final sealer re-authenticates the exact stage bytes and validates every stage-seal dependency", async () => {
+  it("moves verified runtime bytes into an ACL-locked private execution root before import", async () => {
+    const launcher = await readFile(join(process.cwd(), "scripts", "run-b6-project-expansion-runtime.mjs"), "utf8");
+    const attestation = await readFile(join(process.cwd(), "scripts", "b6-runtime-attestation.mjs"), "utf8");
+    for (const marker of ["runtime-exec", "compiledDigest", "lockExecutionRoot", "unlockExecutionRoot", "icacls", "executionRoot"]) expect(launcher).toContain(marker);
+    expect(launcher).toContain("await cp(buildRoot, executionRoot");
+    expect(launcher.indexOf("await lockExecutionRoot(executionRoot, executionSid)")).toBeLessThan(launcher.indexOf("await import(pathToFileURL(join(executionRoot"));
+    expect(launcher.indexOf("await rm(preparedBuildRoot")).toBeLessThan(launcher.indexOf("await import(pathToFileURL(join(executionRoot"));
+    expect(attestation).toContain("runtime-exec");
+    expect(attestation).toContain("B6_RUNTIME_EXECUTION_ROOT_DENIED");
+  });  it("final sealer re-authenticates the exact stage bytes and validates every stage-seal dependency", async () => {
     const finalSeal = await readFile(join(process.cwd(), "scripts", "seal-b6-final.mjs"), "utf8");
     for (const marker of ["createHmac", "timingSafeEqual", "loadOperatorKey", "verifyStageArtifactAuthentication",
       "certificationHmacSha256", "liveQualificationEvidenceHmacSha256", "HAIOS_B6_STAGE_FINAL_SEAL_R1",

@@ -1,12 +1,26 @@
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
-import { readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
-import { verifyPreparedB6RuntimeBuild } from "./b6-runtime-attestation.mjs";
+import { compiledDigest, verifyPreparedB6RuntimeBuild } from "./b6-runtime-attestation.mjs";
 
 const run = promisify(execFile);
+async function currentUserSid() {
+  const result = await run("whoami", ["/user", "/fo", "csv", "/nh"], { encoding: "utf8", windowsHide: true, maxBuffer: 1024 * 1024 });
+  const match = result.stdout.match(/S-\d-\d+(?:-\d+)+/u);
+  if (!match) throw new Error("B6_RUNTIME_EXECUTION_IDENTITY_REQUIRED");
+  return match[0];
+}
+async function lockExecutionRoot(executionRoot, sid) {
+  await run("icacls", [executionRoot, "/inheritance:r", "/grant:r", `*${sid}:(OI)(CI)RX`, "*S-1-5-18:(OI)(CI)F", "/T", "/C"],
+    { encoding: "utf8", windowsHide: true, maxBuffer: 8 * 1024 * 1024 });
+}
+async function unlockExecutionRoot(executionRoot, sid) {
+  await run("icacls", [executionRoot, "/grant:r", `*${sid}:(OI)(CI)F`, "/T", "/C"],
+    { encoding: "utf8", windowsHide: true, maxBuffer: 8 * 1024 * 1024 });
+}
 const args = process.argv.slice(2);
 if (args.length !== 1) throw new Error("B6_CONFIG_PATH_REQUIRED");
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -25,7 +39,8 @@ const buildRel = relative(runtimeReal, buildRoot);
 if (buildRel === "" || isAbsolute(buildRel) || buildRel === ".." || buildRel.startsWith(`..${sep}`)) {
   throw new Error("B6_RUNTIME_BUILD_ROOT_DENIED");
 }
-let started; let attestationPath; let tempAttestationPath; let attestation;
+const preparedBuildRoot = buildRoot;
+let executionRoot; let executionSid; let started; let attestationPath; let tempAttestationPath; let attestation;
 try {
   const buildMetadata = JSON.parse(await readFile(join(buildRoot, "b6-runtime-build.json"), "utf8"));
 if (buildMetadata.candidateHeadSha !== prepared.candidateHeadSha || buildMetadata.candidateManifestSha256 !== prepared.candidateManifestSha256
@@ -47,9 +62,25 @@ if (config.stage === "HERMES_OS") {
   } catch { throw new Error("B6_STAGE_ONE_AUTHENTICATED_PROOF_REQUIRED"); }
 }
 buildRoot = await verifyPreparedB6RuntimeBuild(prepared);
-const runtimeModule = await import(pathToFileURL(join(buildRoot, "src", "operator", "b6-active-runtime.js")).href);
-const verifiedPostImportRoot = await verifyPreparedB6RuntimeBuild(prepared);
-if (verifiedPostImportRoot !== buildRoot) throw new Error("B6_RUNTIME_BUILD_ROOT_DRIFT");
+const executionParent = resolve(localAppData, "HAIOS", "B6", "runtime-exec");
+await mkdir(executionParent, { recursive: true });
+executionRoot = await mkdtemp(join(executionParent, "b6-exec-"));
+await cp(buildRoot, executionRoot, { recursive: true, force: false, errorOnExist: true });
+const executionMetadataPath = join(executionRoot, "b6-runtime-build.json");
+await writeFile(executionMetadataPath, `${JSON.stringify({ ...buildMetadata, buildRoot: executionRoot })}\n`, "utf8");
+executionSid = await currentUserSid();
+await lockExecutionRoot(executionRoot, executionSid);
+const executionMetadata = JSON.parse(await readFile(executionMetadataPath, "utf8"));
+const executionDigest = await compiledDigest(executionRoot);
+if (resolve(executionMetadata.buildRoot) !== executionRoot || executionMetadata.candidateHeadSha !== prepared.candidateHeadSha
+  || executionMetadata.candidateManifestSha256 !== prepared.candidateManifestSha256
+  || executionMetadata.compiledOutputSha256 !== prepared.compiledOutputSha256 || executionMetadata.compiledFileCount !== prepared.compiledFileCount
+  || executionDigest.compiledFileCount !== prepared.compiledFileCount || executionDigest.compiledOutputSha256 !== prepared.compiledOutputSha256) {
+  throw new Error("B6_RUNTIME_EXECUTION_COPY_DRIFT");
+}
+await rm(preparedBuildRoot, { recursive: true, force: false });
+buildRoot = executionRoot;
+const runtimeModule = await import(pathToFileURL(join(executionRoot, "src", "operator", "b6-active-runtime.js")).href);
 started = await runtimeModule.createB6ActiveRuntime(config);
 await started.listen();
 const readiness = runtimeModule.createB6ReadinessMetadata(config);
@@ -80,7 +111,11 @@ process.stdout.write(`${JSON.stringify({ ...readiness, candidateHeadSha: prepare
       if (current.pid === process.pid && current.attestationSha256 === attestation.attestationSha256) await rm(attestationPath, { force: false });
     } catch {}
   }
-  await rm(buildRoot, { recursive: true, force: true }).catch(() => undefined);
+  await rm(preparedBuildRoot, { recursive: true, force: true }).catch(() => undefined);
+  if (executionRoot) {
+    if (executionSid) await unlockExecutionRoot(executionRoot, executionSid).catch(() => undefined);
+    await rm(executionRoot, { recursive: true, force: true }).catch(() => undefined);
+  }
   throw error;
 }
 let closing = false;
@@ -92,7 +127,8 @@ const close = async () => {
     const current = JSON.parse(await readFile(attestationPath, "utf8"));
     if (current.pid === process.pid && current.attestationSha256 === attestation.attestationSha256) await rm(attestationPath, { force: false });
   } catch {}
-  await rm(buildRoot, { recursive: true, force: true });
+  if (executionRoot && executionSid) await unlockExecutionRoot(executionRoot, executionSid);
+  if (executionRoot) await rm(executionRoot, { recursive: true, force: true });
   process.exitCode = 0;
 };
 process.once("SIGINT", () => { void close(); });

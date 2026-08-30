@@ -94,15 +94,16 @@ export async function loadCurrentB6RuntimeBinding(expectedStage) {
     || attestationSha256 !== sha256(Buffer.from(stableJson(unsigned), "utf8"))) throw new Error("B6_RUNTIME_BUILD_ATTESTATION_INVALID");
   const expectedScope = expectedStage === "SKILL_FABRIC" ? "B6_SKILL_FABRIC_ADMISSION" : "B6_HERMES_OS_ADMISSION";
   if (attestation.activationScope !== expectedScope) throw new Error("B6_RUNTIME_BUILD_ATTESTATION_INVALID");
-  const runtimeReal = await realpath(runtimeRoot);
+  const executionParent = resolve(localAppData, "HAIOS", "B6", "runtime-exec");
+  const executionReal = await realpath(executionParent);
   const buildRoot = await realpath(resolve(attestation.buildRoot));
-  const rel = relative(runtimeReal, buildRoot);
-  if (rel === "" || isAbsolute(rel) || rel === ".." || rel.startsWith(`..${sep}`)) throw new Error("B6_RUNTIME_BUILD_ROOT_DENIED");
+  const rel = relative(executionReal, buildRoot);
+  if (rel === "" || isAbsolute(rel) || rel === ".." || rel.startsWith(`..${sep}`)) throw new Error("B6_RUNTIME_EXECUTION_ROOT_DENIED");
   const current = await currentCandidateFacts();
   if (!current.clean || attestation.candidateHeadSha !== current.candidateHeadSha || attestation.candidateTrackedCount !== current.candidateTrackedCount
     || attestation.candidateManifestSha256 !== current.candidateManifestSha256) throw new Error("B6_RUNTIME_BUILD_SOURCE_NOT_CURRENT");
   const metadata = JSON.parse(await readFile(join(buildRoot, "b6-runtime-build.json"), "utf8"));
-  if (metadata.schema !== "HAIOS_B6_RUNTIME_BUILD_R1" || metadata.candidateHeadSha !== attestation.candidateHeadSha
+  if (metadata.schema !== "HAIOS_B6_RUNTIME_BUILD_R1" || resolve(metadata.buildRoot) !== buildRoot || metadata.candidateHeadSha !== attestation.candidateHeadSha
     || metadata.candidateManifestSha256 !== attestation.candidateManifestSha256 || metadata.compiledOutputSha256 !== attestation.compiledOutputSha256
     || metadata.compiledFileCount !== attestation.compiledFileCount) throw new Error("B6_RUNTIME_BUILD_METADATA_DRIFT");
   const compiled = await compiledDigest(buildRoot);
@@ -116,8 +117,8 @@ export async function loadCurrentB6RuntimeBinding(expectedStage) {
       throw new Error("B6_RUNTIME_BUILD_REPRODUCTION_FAILED");
     }
     try { process.kill(attestation.pid, 0); } catch { throw new Error("B6_RUNTIME_PROCESS_NOT_CURRENT"); }
-    const hostConfig = await import(pathToFileURL(join(verifier.buildRoot, "src", "operator", "host-runtime-config.js")).href);
-    const protocol = await import(pathToFileURL(join(verifier.buildRoot, "src", "operator", "protocol.js")).href);
+    const hostConfig = await import(pathToFileURL(join(buildRoot, "src", "operator", "host-runtime-config.js")).href);
+    const protocol = await import(pathToFileURL(join(buildRoot, "src", "operator", "protocol.js")).href);
     return Object.freeze({ attestation: Object.freeze(attestation), current, loadHostApiKey: hostConfig.loadHostApiKey,
       OPERATOR_V1_TOOL_NAMES: protocol.OPERATOR_V1_TOOL_NAMES });
   } finally {
