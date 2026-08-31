@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   LocalOperatorGit,
+  readLocalGitCurrentBranch,
   type OperatorGitExecutor,
   type OperatorGitExecResult,
 } from "../src/operator/local-git.js";
@@ -15,7 +16,7 @@ function fixture(results: OperatorGitExecResult[] = []) {
     calls.push({ cwd, args: [...args] });
     return results[index++] ?? { stdout: "", stderr: "", exitCode: 0 };
   };
-  return { git: new LocalOperatorGit(executor), calls };
+  return { git: new LocalOperatorGit(executor), executor, calls };
 }
 
 const SHA_A = "a".repeat(40);
@@ -69,6 +70,19 @@ describe("M06 typed local-only Git boundary", () => {
 
     const error = fixture([{ stdout: "", stderr: "fatal", exitCode: 2 }]);
     await expect(error.git.isAncestor("C:\\repo", SHA_A, SHA_B)).rejects.toThrow(/GIT_COMMAND_FAILED/);
+  });
+
+  it("reads the current worktree branch through a fixed local Git command outside the certified adapter prototype", async () => {
+    const fx = fixture([{ stdout: "haios-tx-owned\n", stderr: "", exitCode: 0 }]);
+    await expect(readLocalGitCurrentBranch("C:\\worktrees\\tx1", fx.executor)).resolves.toBe("haios-tx-owned");
+    expect(fx.calls.map((call) => call.args)).toEqual([
+      ["--no-optional-locks", "branch", "--show-current"],
+    ]);
+  });
+
+  it("fails the separate branch reader when its fixed command is nonzero", async () => {
+    const fx = fixture([{ stdout: "", stderr: "fatal", exitCode: 2 }]);
+    await expect(readLocalGitCurrentBranch("C:\\worktrees\\tx1", fx.executor)).rejects.toThrow(/GIT_COMMAND_FAILED:branch:2/);
   });
 
   it("validates SHA, branch and commit message before invoking Git", async () => {

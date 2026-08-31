@@ -29,6 +29,10 @@ import {
   isQualifiedOperatorControlRuntime,
   type QualifiedOperatorControlRuntime,
 } from "./operator/qualified-control-runtime.js";
+import {
+  isM12ActiveCanaryOperatorRuntime,
+  type M12ActiveCanaryOperatorRuntime,
+} from "./operator/m12-active-canary-operator-core.js";
 import { TransactionMutationAdapter } from "./transactions/adapter.js";
 import { createGitCurrentnessProvider, TRANSACTION_PROJECT_ROOT } from "./transactions/currentness.js";
 import { TransactionService, dispatchTransactionTool, type TransactionServiceApi } from "./transactions/service.js";
@@ -58,7 +62,7 @@ export interface GatewayServerConfig {
   readonly protocolMode?: "legacy27" | "operator13";
   readonly operatorTaskRegistryPath?: string;
   readonly operatorMode?: "READ_ONLY_EMERGENCY" | "ACTIVE";
-  readonly operatorRuntime?: QualifiedOperatorControlRuntime;
+  readonly operatorRuntime?: QualifiedOperatorControlRuntime | M12ActiveCanaryOperatorRuntime;
   readonly host?: string;
   readonly port?: number;
 }
@@ -196,7 +200,9 @@ export async function createGatewayServer(
   if (operatorMode === "ACTIVE" && config.operatorRuntime === undefined) {
     throw new Error("M08_ACTIVE_RUNTIME_REQUIRED");
   }
-  if (operatorMode === "ACTIVE" && !isQualifiedOperatorControlRuntime(config.operatorRuntime)) {
+  if (operatorMode === "ACTIVE"
+    && !isQualifiedOperatorControlRuntime(config.operatorRuntime)
+    && !isM12ActiveCanaryOperatorRuntime(config.operatorRuntime)) {
     throw new Error("M08_ACTIVE_RUNTIME_UNQUALIFIED");
   }
   if (operatorMode !== "ACTIVE" && config.operatorRuntime !== undefined) {

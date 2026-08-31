@@ -21,10 +21,27 @@ export interface OperatorTransactionGit {
   mergeFastForward(cwd: string, checkpoint: string): Promise<string>;
 }
 
+export type OperatorTransactionBranchReader = (worktreePath: string) => Promise<string>;
+
+export type OperatorTransactionRecoveryDecision =
+  | "SAFE_TO_CONTINUE"
+  | "SAFE_TO_ROLLBACK"
+  | "MANUAL_RECONCILIATION_REQUIRED";
+
+export interface OperatorTransactionRecoveryCoordinator {
+  onBegin(record: OperatorTransactionRecord, repositoryIdentity: string): Promise<void>;
+  onTerminal(record: OperatorTransactionRecord): Promise<void>;
+  recoverOwnedTransaction(record: OperatorTransactionRecord): Promise<OperatorTransactionRecoveryDecision>;
+  collectOwnedResidue(): Promise<readonly OperatorTransactionRecord[]>;
+}
+
 export interface OperatorTransactionServiceConfig {
   readonly worktreeRoot: string;
   readonly allowedProjects: Readonly<Record<string, string>>;
   readonly git: OperatorTransactionGit;
+  readonly recovery?: OperatorTransactionRecoveryCoordinator;
+  /** Recovery cleanup requires an exact, independently injected worktree branch identity reader. */
+  readonly readCurrentWorktreeBranch?: OperatorTransactionBranchReader;
 }
 
 export type OperatorTransactionResult =
@@ -136,6 +153,8 @@ export class OperatorTransactionService {
   readonly #worktreeRoot: string;
   readonly #allowedProjects: Readonly<Record<string, string>>;
   readonly #git: OperatorTransactionGit;
+  readonly #recovery: OperatorTransactionRecoveryCoordinator | undefined;
+  readonly #readCurrentWorktreeBranch: OperatorTransactionBranchReader | undefined;
   readonly #records = new Map<string, MutableRecord>();
   readonly #repositoryIdentity = new Map<string, string>();
 
@@ -143,6 +162,8 @@ export class OperatorTransactionService {
     this.#worktreeRoot = win32.resolve(config.worktreeRoot);
     this.#allowedProjects = Object.freeze({ ...config.allowedProjects });
     this.#git = config.git;
+    this.#recovery = config.recovery;
+    this.#readCurrentWorktreeBranch = config.readCurrentWorktreeBranch;
   }
 
   async #commonDirAbsolute(cwd: string): Promise<string | null> {
@@ -191,6 +212,17 @@ export class OperatorTransactionService {
     };
     this.#records.set(txId, record);
     this.#repositoryIdentity.set(txId, canonicalIdentity);
+    if (this.#recovery !== undefined) {
+      try { await this.#recovery.onBegin(snapshot(record), canonicalIdentity); }
+      catch {
+        const cleaned = await this.#discardRuntime(record);
+        if (cleaned) {
+          this.#records.delete(txId);
+          return { decision: "DENY", reason: "RECOVERY_BEGIN_FAILED_TRANSACTION_DISCARDED" };
+        }
+        return { decision: "DENY", reason: "RECOVERY_BEGIN_FAILED_CLEANUP_PENDING" };
+      }
+    }
     return allow(record);
   }
   #record(txId: string): MutableRecord | undefined {
@@ -318,10 +350,26 @@ export class OperatorTransactionService {
   async #discardRuntime(record: MutableRecord): Promise<boolean> {
     const expectedIdentity = this.#repositoryIdentity.get(record.txId);
     if (expectedIdentity === undefined) return false;
+    if (this.#recovery !== undefined) {
+      try {
+        const canonicalHead = await this.#git.head(record.canonicalRoot);
+        if ((await this.#git.status(record.canonicalRoot)).trim().length !== 0) return false;
+        if (record.state === "PROMOTED") {
+          if (record.checkpointId === undefined || canonicalHead !== record.checkpointId) return false;
+        } else if (canonicalHead !== record.baseHeadSha
+          && !(await this.#git.isAncestor(record.canonicalRoot, record.baseHeadSha, canonicalHead))) return false;
+      } catch { return false; }
+    }
     const canonicalIdentity = await this.#commonDirAbsolute(record.canonicalRoot);
     const worktreeIdentity = await this.#commonDirAbsolute(record.worktreePath);
     if (canonicalIdentity === null || worktreeIdentity === null) return false;
     if (!samePath(canonicalIdentity, expectedIdentity) || !samePath(worktreeIdentity, expectedIdentity)) return false;
+    if (this.#recovery !== undefined) {
+      try {
+        if (this.#readCurrentWorktreeBranch === undefined
+          || (await this.#readCurrentWorktreeBranch(record.worktreePath)) !== record.branchName) return false;
+      } catch { return false; }
+    }
     try { await this.#git.worktreeRemove(record.canonicalRoot, record.worktreePath); }
     catch { return false; }
     try { await this.#git.deleteBranch(record.canonicalRoot, record.branchName); }
@@ -330,10 +378,17 @@ export class OperatorTransactionService {
     return true;
   }
 
-  async #discard(record: MutableRecord): Promise<boolean> {
+  async #notifyTerminal(record: MutableRecord): Promise<boolean> {
+    if (this.#recovery === undefined) return true;
+    try { await this.#recovery.onTerminal(snapshot(record)); return true; }
+    catch { return false; }
+  }
+
+  async #discard(record: MutableRecord): Promise<"CLEAN" | "RUNTIME_PENDING" | "RECOVERY_PENDING"> {
     const clean = await this.#discardRuntime(record);
-    if (clean) record.state = "ROLLED_BACK";
-    return clean;
+    if (!clean) return "RUNTIME_PENDING";
+    record.state = "ROLLED_BACK";
+    return await this.#notifyTerminal(record) ? "CLEAN" : "RECOVERY_PENDING";
   }
 
   async #applyIntent(record: MutableRecord, intent: OperatorTransactionIntent): Promise<boolean> {
@@ -382,7 +437,7 @@ export class OperatorTransactionService {
       return allow(record);
     } catch {
       const discarded = await this.#discard(record);
-      return discarded
+      return discarded === "CLEAN"
         ? { decision: "DENY", reason: "APPLY_FAILED_TRANSACTION_DISCARDED" }
         : { decision: "DENY", reason: "APPLY_FAILED_CLEANUP_PENDING" };
     }
@@ -442,7 +497,9 @@ export class OperatorTransactionService {
       return { decision: "DENY", reason: "PROMOTION_FAILED" };
     }
     record.state = "PROMOTED";
-    const cleanupPending = !(await this.#discardRuntime(record));
+    const runtimeClean = await this.#discardRuntime(record);
+    const recoveryClean = runtimeClean ? await this.#notifyTerminal(record) : false;
+    const cleanupPending = !runtimeClean || !recoveryClean;
     return { decision: "ALLOW", transaction: snapshot(record), state: record.state, cleanupPending };
   }
 
@@ -453,7 +510,9 @@ export class OperatorTransactionService {
       return { decision: "DENY", reason: "INVALID_TRANSACTION_STATE" };
     }
     const cleaned = await this.#discard(record);
-    return cleaned ? allow(record) : { decision: "DENY", reason: "ROLLBACK_CLEANUP_PENDING" };
+    if (cleaned === "CLEAN") return allow(record);
+    if (cleaned === "RECOVERY_PENDING") return { decision: "DENY", reason: "ROLLBACK_RECOVERY_RELEASE_PENDING" };
+    return { decision: "DENY", reason: "ROLLBACK_CLEANUP_PENDING" };
   }
 
   async status(txId: string): Promise<OperatorTransactionStatusResult> {

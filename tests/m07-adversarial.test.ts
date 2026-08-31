@@ -33,7 +33,7 @@ describe("M07 adversarial authority boundaries", () => {
   });
   it("pins the qualified image and exposes no generic Docker primitive", () => {
     expect(M07_NODE_TOOLCHAIN.image).toBe(
-      "haios-operator-sandbox-node@sha256:4c1909633b4c7c6e8dfce3e7994bacaf81ac30808a055d4ba790e9b7c366dcfe",
+      "haios-operator-sandbox-node@sha256:c0a0293478bb7eff92a33281597ad374cf0c1f71793f489ce8b49f6349b82b2e",
     );
     expect(Object.getOwnPropertyNames(SandboxExecutor.prototype)).toEqual(["constructor", "execute"]);
   });

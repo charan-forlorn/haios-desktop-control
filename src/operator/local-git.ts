@@ -31,6 +31,17 @@ const defaultExecutor: OperatorGitExecutor = (args, cwd) => new Promise((resolve
     resolve({ stdout: String(stdout), stderr: String(stderr), exitCode: code });
   });
 });
+
+/** Recovery-only fixed branch identity read; deliberately outside LocalOperatorGit's M06-certified prototype. */
+export async function readLocalGitCurrentBranch(
+  cwd: string,
+  executor: OperatorGitExecutor = defaultExecutor,
+): Promise<string> {
+  const result = await executor(["--no-optional-locks", "branch", "--show-current"], cwd);
+  if (result.exitCode !== 0) throw new Error(`GIT_COMMAND_FAILED:branch:${result.exitCode}`);
+  return result.stdout.trim();
+}
+
 export class LocalOperatorGit {
   readonly #executor: OperatorGitExecutor;
 
